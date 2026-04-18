@@ -1,4 +1,4 @@
-import express, { Request } from 'express';
+import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
@@ -8,39 +8,150 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import archiver from 'archiver';
 import AdmZip from 'adm-zip';
+import rateLimit from 'express-rate-limit';
+import { promises as dnsPromises } from 'dns';
+import net from 'net';
+import crypto from 'crypto';
 
-// Extend Express Request type
-interface AuthenticatedRequest extends Request {
-  user?: {
-    username: string;
-    role: string;
-  };
+// =============================================================================
+// Configuration & Startup Checks
+// =============================================================================
+
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+const baseVaultPath = path.resolve(
+  process.env.VAULT_PATH || path.join(process.cwd(), 'vault')
+);
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error('\nFATAL: JWT_SECRET environment variable is required and must be at least 32 characters long.');
+  console.error('Generate one with:\n  node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"\n');
+  process.exit(1);
 }
 
-const app = express();
-const PORT = 3000;
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
+const MAX_UPLOAD_SIZE = Number(process.env.MAX_UPLOAD_SIZE) || 50 * 1024 * 1024; // 50 MB
+const BCRYPT_ROUNDS = 12;
+const ENABLE_IFRAME_PROXY = process.env.ENABLE_IFRAME_PROXY !== 'false';
 
-app.use(cors());
-app.use(express.json());
-
-const baseVaultPath = process.env.VAULT_PATH || path.join(process.cwd(), 'vault');
-const JWT_SECRET = process.env.JWT_SECRET || 'jays-notes-super-secret-key';
 const usersFile = path.join(baseVaultPath, '.users.json');
 
-// Ensure base dir exists
 if (!fs.existsSync(baseVaultPath)) {
   fs.mkdirSync(baseVaultPath, { recursive: true });
 }
 
-// Helper: Get user-specific paths and ensure they exist
+console.log(`[startup] Vault path:     ${baseVaultPath}`);
+console.log(`[startup] Allowed origin: ${ALLOWED_ORIGIN}`);
+console.log(`[startup] Port:           ${PORT}`);
+
+// =============================================================================
+// Security Helpers
+// =============================================================================
+
+/**
+ * Safely resolve a user-supplied relative path against a root directory.
+ * Returns null if the result would escape the root (path-traversal guard).
+ * Uses path.resolve + exact-match check with trailing separator.
+ */
+function safeJoin(root: string, rel: string): string | null {
+  if (typeof rel !== 'string') return null;
+  const rootResolved = path.resolve(root);
+  const resolved = path.resolve(rootResolved, rel);
+  if (resolved === rootResolved) return resolved;
+  if (!resolved.startsWith(rootResolved + path.sep)) return null;
+  return resolved;
+}
+
+/** Usernames must be 3-32 chars of alphanumerics, underscore, or dash. */
+function validateUsername(name: any): name is string {
+  return typeof name === 'string' && /^[a-zA-Z0-9_-]{3,32}$/.test(name);
+}
+
+/** Minimum 8 chars, maximum 256. */
+function validatePassword(pw: any): pw is string {
+  return typeof pw === 'string' && pw.length >= 8 && pw.length <= 256;
+}
+
+/**
+ * Sanitize a filename from an upload. Strips any path components and
+ * replaces risky characters.
+ */
+function sanitizeFilename(name: string): string {
+  const basename = path.basename(String(name));
+  const cleaned = basename
+    .replace(/[^\w\-. ]/g, '_')
+    .replace(/^\.+/, '_')
+    .slice(0, 240);
+  return cleaned || 'unnamed';
+}
+
+/** Identify private/loopback/link-local addresses to prevent SSRF. */
+function isPrivateAddress(ip: string): boolean {
+  if (!net.isIP(ip)) return true;
+  if (ip === '127.0.0.1' || ip === '0.0.0.0') return true;
+  if (ip.startsWith('10.')) return true;
+  if (ip.startsWith('192.168.')) return true;
+  if (ip.startsWith('169.254.')) return true; // link-local incl. cloud metadata
+  const m = ip.match(/^172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  if (ip === '::1' || ip === '::') return true;
+  const low = ip.toLowerCase();
+  if (low.startsWith('fc') || low.startsWith('fd')) return true;
+  if (low.startsWith('fe80:')) return true;
+  return false;
+}
+
+/** Validate a URL before fetching it on behalf of a user. */
+async function validateSafeFetchUrl(rawUrl: string): Promise<URL | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+  try {
+    const { address } = await dnsPromises.lookup(parsed.hostname);
+    if (isPrivateAddress(address)) return null;
+  } catch {
+    return null;
+  }
+  return parsed;
+}
+
+/** Write JSON atomically: write to a temp file, then rename. */
+function atomicWriteJson(filePath: string, data: any) {
+  const tmp = `${filePath}.tmp.${crypto.randomBytes(4).toString('hex')}`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, filePath);
+}
+
+// =============================================================================
+// User Store
+// =============================================================================
+
+const getUsers = () => {
+  if (!fs.existsSync(usersFile)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(usersFile, 'utf-8'));
+  } catch {
+    return {};
+  }
+};
+const saveUsers = (users: any) => atomicWriteJson(usersFile, users);
+
 const getUserScope = (username: string) => {
+  if (!validateUsername(username)) {
+    throw new Error('Invalid username for scope lookup');
+  }
   const userVaultPath = path.join(baseVaultPath, username);
   const attachmentsPath = path.join(userVaultPath, 'attachments');
   const templatesPath = path.join(userVaultPath, 'Templates');
 
   if (!fs.existsSync(userVaultPath)) {
     fs.mkdirSync(userVaultPath, { recursive: true });
-    // Seed new user with a welcome file
     fs.writeFileSync(
       path.join(userVaultPath, 'Welcome.md'),
       `# Welcome to your Vault, ${username}!\n\nThis is your private workspace. No other users can see your files.\n\nTry creating a link like [[Another Note]] or adding some #tags.`
@@ -55,49 +166,82 @@ const getUserScope = (username: string) => {
     );
   }
 
-  return {
-    vaultPath: userVaultPath,
-    attachmentsPath,
-    templatesPath
-  };
+  return { vaultPath: userVaultPath, attachmentsPath, templatesPath };
 };
 
-const getUsers = () => {
-  if (!fs.existsSync(usersFile)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(usersFile, 'utf-8'));
-  } catch (e) {
-    return {};
-  }
-};
+// =============================================================================
+// Express App
+// =============================================================================
 
-const saveUsers = (users: any) => {
-  fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
-};
+const app = express();
+app.set('trust proxy', 1); // trust Nginx / reverse proxy for correct client IPs
 
+app.use(cors({ origin: ALLOWED_ORIGIN, credentials: false }));
+app.use(express.json({ limit: '10mb' }));
+
+// Global per-IP rate limit on all API endpoints
+app.use('/api/', rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
+
+// Stricter limit on auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many authentication attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// =============================================================================
 // Auth Middleware
-const authenticateToken = (req: any, res: any, next: any) => {
-  const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+// =============================================================================
 
+function verifyTokenAndAttachUser(token: string | null, req: any, res: any, next: any) {
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-  jwt.verify(token, JWT_SECRET, (err: any, tokenUser: any) => {
+  jwt.verify(token, JWT_SECRET!, (err: any, tokenUser: any) => {
     if (err) return res.status(403).json({ error: 'Forbidden' });
-    
-    // Safety check: ensure user still exists in DB
+
     const users = getUsers();
-    if (!users[tokenUser.username]) {
+    const userRecord = users[tokenUser.username];
+    if (!userRecord) {
       return res.status(401).json({ error: 'User account no longer exists' });
     }
-    
-    req.user = { 
-      username: tokenUser.username, 
-      role: users[tokenUser.username].role || 'user'
-    };
+
+    // If the user's tokenVersion has been bumped (password change/reset),
+    // all tokens issued before the bump are rejected.
+    const tokenVersion = tokenUser.tokenVersion ?? -1;
+    const currentVersion = userRecord.tokenVersion ?? 0;
+    if (tokenVersion !== currentVersion) {
+      return res.status(401).json({ error: 'Session expired, please log in again' });
+    }
+
+    req.user = { username: tokenUser.username, role: userRecord.role || 'user' };
     next();
   });
-};
+}
+
+/** Accept JWT only from the Authorization header. Use for all JSON/state-changing routes. */
+function authHeaderOnly(req: any, res: any, next: any) {
+  const authHeader = req.headers['authorization'];
+  const match = authHeader && /^Bearer (.+)$/.exec(authHeader);
+  const token = match ? match[1] : null;
+  return verifyTokenAndAttachUser(token, req, res, next);
+}
+
+/**
+ * Accept JWT from header OR query string. Only use on GET endpoints that are
+ * loaded in contexts where headers can't be set (<img>, <iframe>, download links).
+ */
+function authHeaderOrQuery(req: any, res: any, next: any) {
+  const authHeader = req.headers['authorization'];
+  const match = authHeader && /^Bearer (.+)$/.exec(authHeader);
+  const token = (match ? match[1] : null) || (req.query?.token as string) || null;
+  return verifyTokenAndAttachUser(token, req, res, next);
+}
 
 const adminOnly = (req: any, res: any, next: any) => {
   if (req.user?.role !== 'admin') {
@@ -106,7 +250,13 @@ const adminOnly = (req: any, res: any, next: any) => {
   next();
 };
 
-// --- Auth Routes ---
+function issueToken(username: string, role: string, tokenVersion: number) {
+  return jwt.sign({ username, role, tokenVersion }, JWT_SECRET!, { expiresIn: '30d' });
+}
+
+// =============================================================================
+// Auth Routes
+// =============================================================================
 
 app.get('/api/auth/status', (req, res) => {
   const users = getUsers();
@@ -114,416 +264,155 @@ app.get('/api/auth/status', (req, res) => {
   res.json({ needsBootstrap: !hasAdmin });
 });
 
-app.post('/api/auth/bootstrap', async (req, res) => {
+app.post('/api/auth/bootstrap', authLimiter, async (req, res) => {
   const { username, password, email } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (!validateUsername(username)) {
+    return res.status(400).json({ error: 'Username must be 3-32 characters: letters, numbers, underscore, or dash.' });
+  }
+  if (!validatePassword(password)) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
 
   const users = getUsers();
   const hasAdmin = Object.values(users).some((u: any) => u.role === 'admin');
   if (hasAdmin) return res.status(403).json({ error: 'System already bootstrapped' });
 
-  const hashedPassword = await bcrypt.hash(password, 10);
-  users[username] = { 
-    password: hashedPassword, 
-    role: 'admin', 
-    email: email || '',
-    createdAt: new Date().toISOString() 
+  const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  users[username] = {
+    password: hashedPassword,
+    role: 'admin',
+    email: (typeof email === 'string' ? email : '').slice(0, 256),
+    tokenVersion: 0,
+    createdAt: new Date().toISOString(),
   };
   saveUsers(users);
 
-  const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: '30d' });
+  const token = issueToken(username, 'admin', 0);
   res.json({ token, role: 'admin', username });
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { username, password } = req.body;
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+
   const users = getUsers();
   const user = users[username];
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
+  // Always run bcrypt to avoid user-enumeration via timing.
+  const dummyHash = '$2a$12$CwTycUXWue0Thq9StjUM0uJ8mZEtUz7rSgVdSiKvMqvQMyxZJgZVC';
+  const hashToCompare = user?.password || dummyHash;
+  const ok = await bcrypt.compare(password, hashToCompare);
+
+  if (!user || !ok) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
-  const token = jwt.sign({ username, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+  const token = issueToken(username, user.role, user.tokenVersion ?? 0);
   res.json({ token, role: user.role, username });
 });
 
-app.post('/api/auth/change-password', authenticateToken, async (req: any, res) => {
-  const { newPassword } = req.body;
-  if (!newPassword) return res.status(400).json({ error: 'New password required' });
+app.post('/api/auth/change-password', authHeaderOnly, async (req: any, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (typeof currentPassword !== 'string' || !validatePassword(newPassword)) {
+    return res.status(400).json({ error: 'Current password and a valid new password (min 8 chars) are required.' });
+  }
 
   const users = getUsers();
-  users[req.user.username].password = await bcrypt.hash(newPassword, 10);
+  const user = users[req.user.username];
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const ok = await bcrypt.compare(currentPassword, user.password);
+  if (!ok) return res.status(401).json({ error: 'Current password is incorrect' });
+
+  user.password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   saveUsers(users);
-  res.json({ success: true });
+
+  // Reissue a fresh token so the caller's session continues uninterrupted.
+  const token = issueToken(req.user.username, user.role, user.tokenVersion);
+  res.json({ success: true, token });
 });
 
-// --- Admin Routes ---
+// =============================================================================
+// Admin: Users
+// =============================================================================
 
-app.get('/api/admin/users', authenticateToken, adminOnly, (req: any, res) => {
+app.get('/api/admin/users', authHeaderOnly, adminOnly, (req, res) => {
   const users = getUsers();
   const userList = Object.entries(users).map(([username, data]: [string, any]) => ({
     username,
     role: data.role,
     email: data.email || '',
-    createdAt: data.createdAt
+    createdAt: data.createdAt,
   }));
   res.json(userList);
 });
 
-app.get('/api/admin/storage/list', authenticateToken, adminOnly, (req, res) => {
-  function scanDir(dir: string, relativePath = '') {
-    const nodes: any[] = [];
-    if (!fs.existsSync(dir)) return [];
-    
-    const files = fs.readdirSync(dir);
-    for (const file of files) {
-      const fullPath = path.join(dir, file);
-      const relPath = path.join(relativePath, file);
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isDirectory()) {
-        nodes.push({
-          name: file,
-          path: relPath,
-          type: 'folder',
-          children: scanDir(fullPath, relPath),
-          createdAt: stat.birthtimeMs,
-          updatedAt: stat.mtimeMs,
-          size: 0
-        });
-      } else {
-        nodes.push({
-          name: file,
-          path: relPath,
-          type: 'file',
-          createdAt: stat.birthtimeMs,
-          updatedAt: stat.mtimeMs,
-          size: stat.size
-        });
-      }
-    }
-    return nodes;
-  }
-
-  try {
-    res.json(scanDir(baseVaultPath));
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to read storage' });
-  }
-});
-
-app.get('/api/admin/storage/file', authenticateToken, adminOnly, (req, res) => {
-  const relPath = req.query.path as string;
-  if (!relPath) return res.status(400).json({ error: 'Path required' });
-  const fullPath = path.join(baseVaultPath, relPath);
-  if (!fullPath.startsWith(baseVaultPath)) return res.status(403).json({ error: 'Access denied' });
-
-  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
-
-  const stat = fs.statSync(fullPath);
-  if (stat.isDirectory()) {
-    // If it's a directory, ZIP it and stream it
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    res.attachment(`${path.basename(fullPath)}.zip`);
-    archive.pipe(res);
-    archive.directory(fullPath, false);
-    archive.finalize();
-  } else {
-    res.sendFile(fullPath);
-  }
-});
-
-app.post('/api/admin/storage/download-bulk', authenticateToken, adminOnly, (req, res) => {
-  const { paths: relPaths } = req.body;
-  if (!relPaths || !Array.isArray(relPaths) || relPaths.length === 0) {
-    return res.status(400).json({ error: 'Paths must be a non-empty array' });
-  }
-
-  const archive = archiver('zip', { zlib: { level: 9 } });
-  res.attachment('bulk-download.zip');
-  archive.pipe(res);
-
-  for (const relPath of relPaths) {
-    const fullPath = path.join(baseVaultPath, relPath);
-    if (!fullPath.startsWith(baseVaultPath)) continue;
-    if (!fs.existsSync(fullPath)) continue;
-
-    const stat = fs.statSync(fullPath);
-    const baseName = path.basename(fullPath);
-
-    if (stat.isDirectory()) {
-      archive.directory(fullPath, baseName);
-    } else {
-      archive.file(fullPath, { name: baseName });
-    }
-  }
-
-  archive.finalize();
-});
-
-app.post('/api/admin/storage/zip', authenticateToken, adminOnly, (req, res) => {
-  const { paths: relPaths, targetName } = req.body;
-  if (!relPaths || !Array.isArray(relPaths) || relPaths.length === 0) {
-    return res.status(400).json({ error: 'Paths must be a non-empty array' });
-  }
-
-  const zipName = targetName || `archive_${Date.now()}.zip`;
-  // Ensure we are in the directory of the first item or root
-  const firstItemDir = path.dirname(path.join(baseVaultPath, relPaths[0]));
-  const zipPath = path.join(firstItemDir, zipName.endsWith('.zip') ? zipName : `${zipName}.zip`);
-
-  if (!zipPath.startsWith(baseVaultPath)) return res.status(403).json({ error: 'Access denied' });
-
-  const output = fs.createWriteStream(zipPath);
-  const archive = archiver('zip', { zlib: { level: 9 } });
-
-  output.on('close', () => res.json({ success: true, path: path.relative(baseVaultPath, zipPath) }));
-  archive.on('error', (err) => res.status(500).json({ error: err.message }));
-
-  archive.pipe(output);
-
-  for (const relPath of relPaths) {
-    const fullPath = path.join(baseVaultPath, relPath);
-    if (!fullPath.startsWith(baseVaultPath)) continue;
-    if (!fs.existsSync(fullPath)) continue;
-
-    const stat = fs.statSync(fullPath);
-    const baseName = path.basename(fullPath);
-
-    if (stat.isDirectory()) {
-      archive.directory(fullPath, baseName);
-    } else {
-      archive.file(fullPath, { name: baseName });
-    }
-  }
-
-  archive.finalize();
-});
-
-app.post('/api/admin/storage/bulk-delete', authenticateToken, adminOnly, (req, res) => {
-  const { paths: relPaths } = req.body;
-  if (!relPaths || !Array.isArray(relPaths)) return res.status(400).json({ error: 'Paths must be an array' });
-
-  const results = { deleted: [] as string[], errors: [] as any[] };
-
-  for (const relPath of relPaths) {
-    const fullPath = path.join(baseVaultPath, relPath);
-    // Secure path check
-    const normalizedBase = path.resolve(baseVaultPath);
-    const normalizedPath = path.resolve(fullPath);
-    if (!normalizedPath.startsWith(normalizedBase)) {
-      results.errors.push({ path: relPath, error: 'Access denied' });
-      continue;
-    }
-
-    try {
-      if (fs.existsSync(fullPath)) {
-        const stat = fs.statSync(fullPath);
-        if (stat.isDirectory()) {
-          fs.rmSync(fullPath, { recursive: true, force: true });
-        } else {
-          fs.unlinkSync(fullPath);
-        }
-        results.deleted.push(relPath);
-      } else {
-        results.errors.push({ path: relPath, error: 'File not found on disk' });
-      }
-    } catch (e: any) {
-      console.error(`[Admin Storage] Failed to delete ${fullPath}:`, e);
-      results.errors.push({ path: relPath, error: e.message });
-    }
-  }
-
-  res.status(results.errors.length > 0 ? 207 : 200).json(results);
-});
-
-app.post('/api/admin/storage/unzip', authenticateToken, adminOnly, (req, res) => {
-  const { path: relPath, destination: destRelPath } = req.body;
-  const fullPath = path.join(baseVaultPath, relPath);
-  const destPath = destRelPath ? path.join(baseVaultPath, destRelPath) : path.dirname(fullPath);
-
-  if (!fullPath.startsWith(baseVaultPath) || !destPath.startsWith(baseVaultPath)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Archive not found' });
-
-  try {
-    const zip = new AdmZip(fullPath);
-    zip.extractAllTo(destPath, true);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to extract' });
-  }
-});
-
-app.post('/api/admin/storage/file', authenticateToken, adminOnly, (req, res) => {
-  const { path: relPath, content } = req.body;
-  const fullPath = path.join(baseVaultPath, relPath);
-  if (!fullPath.startsWith(baseVaultPath)) return res.status(403).json({ error: 'Access denied' });
-
-  try {
-    const dir = path.dirname(fullPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(fullPath, content);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to save file' });
-  }
-});
-
-app.post('/api/admin/storage/new', authenticateToken, adminOnly, (req, res) => {
-  const { path: relPath, type } = req.body;
-  const fullPath = path.join(baseVaultPath, relPath);
-  if (!fullPath.startsWith(baseVaultPath)) return res.status(403).json({ error: 'Access denied' });
-
-  try {
-    const dir = path.dirname(fullPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    if (type === 'folder') {
-      fs.mkdirSync(fullPath, { recursive: true });
-    } else {
-      fs.writeFileSync(fullPath, '');
-    }
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create' });
-  }
-});
-
-app.post('/api/admin/storage/move', authenticateToken, adminOnly, (req, res) => {
-  const { source, destination } = req.body;
-  const oldPath = path.join(baseVaultPath, source);
-  const newPath = path.join(baseVaultPath, destination);
-
-  if (!oldPath.startsWith(baseVaultPath) || !newPath.startsWith(baseVaultPath)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  try {
-    const destDir = path.dirname(newPath);
-    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-    fs.renameSync(oldPath, newPath);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to move' });
-  }
-});
-
-app.delete('/api/admin/storage/file', authenticateToken, adminOnly, (req, res) => {
-  const relPath = req.query.path as string;
-  if (!relPath) return res.status(400).json({ error: 'Path required' });
-  const fullPath = path.join(baseVaultPath, relPath);
-  const normalizedBase = path.resolve(baseVaultPath);
-  const normalizedPath = path.resolve(fullPath);
-
-  if (!normalizedPath.startsWith(normalizedBase)) return res.status(403).json({ error: 'Access denied' });
-
-  try {
-    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
-    const stat = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
-      fs.rmSync(fullPath, { recursive: true, force: true });
-    } else {
-      fs.unlinkSync(fullPath);
-    }
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete' });
-  }
-});
-
-// Bulk delete endpoint at line 430 is already handled above (removed duplicate here)
-
-app.post('/api/admin/storage/copy', authenticateToken, adminOnly, (req, res) => {
-  const { source, destination } = req.body;
-  const srcPath = path.resolve(baseVaultPath, source);
-  const destPath = path.resolve(baseVaultPath, destination);
-
-  if (!srcPath.startsWith(path.resolve(baseVaultPath)) || !destPath.startsWith(path.resolve(baseVaultPath))) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  try {
-    if (!fs.existsSync(srcPath)) return res.status(404).json({ error: 'Source not found' });
-    const destDir = path.dirname(destPath);
-    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-
-    const stat = fs.statSync(srcPath);
-    if (stat.isDirectory()) {
-      fs.cpSync(srcPath, destPath, { recursive: true });
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to copy' });
-  }
-});
-
-const adminUpload = multer({ 
-  storage: multer.diskStorage({
-    destination: (req: any, file, cb) => {
-      const targetDir = req.query.path ? path.join(baseVaultPath, req.query.path) : baseVaultPath;
-      if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-      cb(null, targetDir);
-    },
-    filename: (req, file, cb) => {
-      cb(null, file.originalname);
-    }
-  })
-});
-
-app.post('/api/admin/storage/upload', authenticateToken, adminOnly, adminUpload.single('file'), (req, res) => {
-  res.json({ success: true });
-});
-
-app.post('/api/admin/users', authenticateToken, adminOnly, async (req, res) => {
+app.post('/api/admin/users', authHeaderOnly, adminOnly, async (req, res) => {
   const { username, password, role, email } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (!validateUsername(username)) {
+    return res.status(400).json({ error: 'Username must be 3-32 characters: letters, numbers, underscore, or dash.' });
+  }
+  if (!validatePassword(password)) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
 
   const users = getUsers();
   if (users[username]) return res.status(400).json({ error: 'User already exists' });
 
+  const safeRole = role === 'admin' ? 'admin' : 'user';
   users[username] = {
-    password: await bcrypt.hash(password, 10),
-    role: role || 'user',
-    email: email || '',
-    createdAt: new Date().toISOString()
+    password: await bcrypt.hash(password, BCRYPT_ROUNDS),
+    role: safeRole,
+    email: (typeof email === 'string' ? email : '').slice(0, 256),
+    tokenVersion: 0,
+    createdAt: new Date().toISOString(),
   };
   saveUsers(users);
-  
-  // Pre-initialize folder
+
+  // Pre-initialize user's folder
   getUserScope(username);
-  
+
   res.json({ success: true });
 });
 
-app.post('/api/admin/users/update', authenticateToken, adminOnly, async (req, res) => {
+app.post('/api/admin/users/update', authHeaderOnly, adminOnly, async (req, res) => {
   const { username, role, email } = req.body;
+  if (!validateUsername(username)) return res.status(400).json({ error: 'Invalid username' });
+
   const users = getUsers();
   if (!users[username]) return res.status(404).json({ error: 'User not found' });
 
-  if (role) users[username].role = role;
-  if (email !== undefined) users[username].email = email;
+  if (role !== undefined) users[username].role = role === 'admin' ? 'admin' : 'user';
+  if (email !== undefined) {
+    users[username].email = typeof email === 'string' ? email.slice(0, 256) : '';
+  }
   saveUsers(users);
   res.json({ success: true });
 });
 
-app.post('/api/admin/users/reset', authenticateToken, adminOnly, async (req, res) => {
+app.post('/api/admin/users/reset', authHeaderOnly, adminOnly, async (req, res) => {
   const { username, newPassword } = req.body;
+  if (!validateUsername(username)) return res.status(400).json({ error: 'Invalid username' });
+  if (!validatePassword(newPassword)) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+  }
+
   const users = getUsers();
   if (!users[username]) return res.status(404).json({ error: 'User not found' });
 
-  users[username].password = await bcrypt.hash(newPassword, 10);
+  users[username].password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  // Invalidate any existing sessions for this user.
+  users[username].tokenVersion = (users[username].tokenVersion ?? 0) + 1;
   saveUsers(users);
   res.json({ success: true });
 });
 
-app.delete('/api/admin/users/:username', authenticateToken, adminOnly, (req: any, res) => {
+app.delete('/api/admin/users/:username', authHeaderOnly, adminOnly, (req: any, res) => {
   const { username } = req.params;
+  if (!validateUsername(username)) return res.status(400).json({ error: 'Invalid username' });
   if (username === req.user.username) return res.status(400).json({ error: 'Cannot delete yourself' });
 
   const users = getUsers();
@@ -531,8 +420,8 @@ app.delete('/api/admin/users/:username', authenticateToken, adminOnly, (req: any
 
   delete users[username];
   saveUsers(users);
-  
-  // Archive folder
+
+  // Archive the user's folder rather than deleting outright.
   const userDir = path.join(baseVaultPath, username);
   const archiveDir = path.join(baseVaultPath, `.archive_${username}_${Date.now()}`);
   if (fs.existsSync(userDir)) {
@@ -542,11 +431,394 @@ app.delete('/api/admin/users/:username', authenticateToken, adminOnly, (req: any
   res.json({ success: true });
 });
 
-// --- Scoped File Operations ---
+// =============================================================================
+// Admin: Storage
+// =============================================================================
 
-app.get('/api/files', authenticateToken, (req: any, res) => {
+/** Hide all dotfiles from the admin file explorer (e.g. .users.json, .archive_*) */
+function isHiddenFromAdmin(name: string): boolean {
+  return name.startsWith('.');
+}
+
+function assertAdminPathAllowed(relPath: string): boolean {
+  const parts = relPath.split(/[\\/]+/).filter(Boolean);
+  return !parts.some(isHiddenFromAdmin);
+}
+
+app.get('/api/admin/storage/list', authHeaderOnly, adminOnly, (req, res) => {
+  function scanDir(dir: string, relativePath = '') {
+    const nodes: any[] = [];
+    if (!fs.existsSync(dir)) return [];
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      if (isHiddenFromAdmin(file)) continue;
+      const fullPath = path.join(dir, file);
+      const relPath = path.join(relativePath, file);
+      const stat = fs.statSync(fullPath);
+
+      if (stat.isDirectory()) {
+        nodes.push({
+          name: file, path: relPath, type: 'folder',
+          children: scanDir(fullPath, relPath),
+          createdAt: stat.birthtimeMs, updatedAt: stat.mtimeMs, size: 0,
+        });
+      } else {
+        nodes.push({
+          name: file, path: relPath, type: 'file',
+          createdAt: stat.birthtimeMs, updatedAt: stat.mtimeMs, size: stat.size,
+        });
+      }
+    }
+    return nodes;
+  }
+
+  try {
+    res.json(scanDir(baseVaultPath));
+  } catch {
+    res.status(500).json({ error: 'Failed to read storage' });
+  }
+});
+
+app.get('/api/admin/storage/file', authHeaderOrQuery, adminOnly, (req, res) => {
+  const relPath = req.query.path as string;
+  if (!relPath) return res.status(400).json({ error: 'Path required' });
+  if (!assertAdminPathAllowed(relPath)) return res.status(403).json({ error: 'Access denied' });
+
+  const fullPath = safeJoin(baseVaultPath, relPath);
+  if (!fullPath) return res.status(403).json({ error: 'Access denied' });
+  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
+
+  const stat = fs.statSync(fullPath);
+  if (stat.isDirectory()) {
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      console.error('[archive]', err);
+      try { res.status(500).end(); } catch {}
+    });
+    res.attachment(`${path.basename(fullPath)}.zip`);
+    archive.pipe(res);
+    archive.directory(fullPath, false);
+    archive.finalize();
+  } else {
+    res.sendFile(fullPath);
+  }
+});
+
+app.post('/api/admin/storage/download-bulk', authHeaderOnly, adminOnly, (req, res) => {
+  const { paths: relPaths } = req.body;
+  if (!Array.isArray(relPaths) || relPaths.length === 0) {
+    return res.status(400).json({ error: 'Paths must be a non-empty array' });
+  }
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('error', (err) => {
+    console.error('[archive]', err);
+    try { res.status(500).end(); } catch {}
+  });
+  res.attachment('bulk-download.zip');
+  archive.pipe(res);
+
+  for (const relPath of relPaths) {
+    if (typeof relPath !== 'string' || !assertAdminPathAllowed(relPath)) continue;
+    const fullPath = safeJoin(baseVaultPath, relPath);
+    if (!fullPath || !fs.existsSync(fullPath)) continue;
+
+    const stat = fs.statSync(fullPath);
+    const baseName = path.basename(fullPath);
+
+    if (stat.isDirectory()) archive.directory(fullPath, baseName);
+    else archive.file(fullPath, { name: baseName });
+  }
+
+  archive.finalize();
+});
+
+app.post('/api/admin/storage/zip', authHeaderOnly, adminOnly, (req, res) => {
+  const { paths: relPaths, targetName } = req.body;
+  if (!Array.isArray(relPaths) || relPaths.length === 0) {
+    return res.status(400).json({ error: 'Paths must be a non-empty array' });
+  }
+
+  const firstAbs = safeJoin(baseVaultPath, relPaths[0]);
+  if (!firstAbs) return res.status(403).json({ error: 'Access denied' });
+
+  const cleanName = sanitizeFilename(typeof targetName === 'string' ? targetName : `archive_${Date.now()}`);
+  const zipFileName = cleanName.endsWith('.zip') ? cleanName : `${cleanName}.zip`;
+  const zipPath = path.join(path.dirname(firstAbs), zipFileName);
+
+  // Ensure the destination is still inside the vault.
+  if (!safeJoin(baseVaultPath, path.relative(baseVaultPath, zipPath))) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  const output = fs.createWriteStream(zipPath);
+  const archive = archiver('zip', { zlib: { level: 9 } });
+
+  output.on('close', () =>
+    res.json({ success: true, path: path.relative(baseVaultPath, zipPath) })
+  );
+  archive.on('error', (err) => {
+    console.error('[archive]', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Archive failed' });
+  });
+
+  archive.pipe(output);
+
+  for (const relPath of relPaths) {
+    if (typeof relPath !== 'string' || !assertAdminPathAllowed(relPath)) continue;
+    const fullPath = safeJoin(baseVaultPath, relPath);
+    if (!fullPath || !fs.existsSync(fullPath)) continue;
+
+    const stat = fs.statSync(fullPath);
+    const baseName = path.basename(fullPath);
+
+    if (stat.isDirectory()) archive.directory(fullPath, baseName);
+    else archive.file(fullPath, { name: baseName });
+  }
+
+  archive.finalize();
+});
+
+app.post('/api/admin/storage/bulk-delete', authHeaderOnly, adminOnly, (req, res) => {
+  const { paths: relPaths } = req.body;
+  if (!Array.isArray(relPaths)) return res.status(400).json({ error: 'Paths must be an array' });
+
+  const results = { deleted: [] as string[], errors: [] as any[] };
+
+  for (const relPath of relPaths) {
+    if (typeof relPath !== 'string' || !assertAdminPathAllowed(relPath)) {
+      results.errors.push({ path: relPath, error: 'Access denied' });
+      continue;
+    }
+    const fullPath = safeJoin(baseVaultPath, relPath);
+    if (!fullPath) {
+      results.errors.push({ path: relPath, error: 'Access denied' });
+      continue;
+    }
+
+    try {
+      if (fs.existsSync(fullPath)) {
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) fs.rmSync(fullPath, { recursive: true, force: true });
+        else fs.unlinkSync(fullPath);
+        results.deleted.push(relPath);
+      } else {
+        results.errors.push({ path: relPath, error: 'File not found' });
+      }
+    } catch (e: any) {
+      console.error(`[admin delete]`, e);
+      results.errors.push({ path: relPath, error: 'Delete failed' });
+    }
+  }
+
+  res.status(results.errors.length > 0 ? 207 : 200).json(results);
+});
+
+app.post('/api/admin/storage/unzip', authHeaderOnly, adminOnly, (req, res) => {
+  const { path: relPath, destination: destRelPath } = req.body;
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
+  if (!assertAdminPathAllowed(relPath)) return res.status(403).json({ error: 'Access denied' });
+
+  const fullPath = safeJoin(baseVaultPath, relPath);
+  if (!fullPath) return res.status(403).json({ error: 'Access denied' });
+
+  const destPath = destRelPath
+    ? safeJoin(baseVaultPath, destRelPath)
+    : path.dirname(fullPath);
+  if (!destPath || !destPath.startsWith(path.resolve(baseVaultPath))) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Archive not found' });
+
+  try {
+    const zip = new AdmZip(fullPath);
+    // Zip-slip defense: pre-scan all entries and fail closed if ANY entry
+    // would resolve outside the destination directory. We do NOT extract
+    // partially — if the archive contains even one unsafe entry, the whole
+    // archive is rejected with 400.
+    const destResolved = path.resolve(destPath);
+    for (const entry of zip.getEntries()) {
+      const rawName = entry.entryName;
+      // Belt-and-suspenders syntactic checks on the raw entry name, before
+      // we let path.resolve() interpret it:
+      //   1. No absolute paths (POSIX "/..." or Windows "C:\..." / "\...").
+      //   2. No ".." components anywhere in the path (covers "../x",
+      //      "a/../../x", "./../x", and backslash-separated variants).
+      //   3. No NUL bytes (defense-in-depth against odd filesystems).
+      const normalized = rawName.replace(/\\/g, '/');
+      const isAbsolute =
+        normalized.startsWith('/') || /^[a-zA-Z]:[\/]/.test(normalized);
+      const hasParentRef = normalized
+        .split('/')
+        .some((seg) => seg === '..');
+      const hasNul = rawName.includes('\0');
+      if (isAbsolute || hasParentRef || hasNul) {
+        console.warn(
+          `[unzip] rejecting archive: unsafe entry name ${JSON.stringify(rawName)}`
+        );
+        return res
+          .status(400)
+          .json({ error: 'Archive contains unsafe entries' });
+      }
+      // Primary check: resolve the entry path and confirm it is inside the
+      // destination. This catches anything the syntactic checks missed.
+      const entryPath = path.resolve(destResolved, rawName);
+      if (
+        entryPath !== destResolved &&
+        !entryPath.startsWith(destResolved + path.sep)
+      ) {
+        console.warn(
+          `[unzip] rejecting archive: entry ${JSON.stringify(rawName)} resolves to ${entryPath}, outside ${destResolved}`
+        );
+        return res
+          .status(400)
+          .json({ error: 'Archive contains unsafe entries' });
+      }
+    }
+    zip.extractAllTo(destPath, true);
+    res.json({ success: true });
+  } catch (e: any) {
+    console.error('[unzip]', e);
+    res.status(500).json({ error: 'Failed to extract' });
+  }
+});
+
+app.post('/api/admin/storage/file', authHeaderOnly, adminOnly, (req, res) => {
+  const { path: relPath, content } = req.body;
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
+  if (!assertAdminPathAllowed(relPath)) return res.status(403).json({ error: 'Access denied' });
+  const fullPath = safeJoin(baseVaultPath, relPath);
+  if (!fullPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(fullPath, typeof content === 'string' ? content : '');
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[admin save]', e);
+    res.status(500).json({ error: 'Failed to save file' });
+  }
+});
+
+app.post('/api/admin/storage/new', authHeaderOnly, adminOnly, (req, res) => {
+  const { path: relPath, type } = req.body;
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
+  if (!assertAdminPathAllowed(relPath)) return res.status(403).json({ error: 'Access denied' });
+  const fullPath = safeJoin(baseVaultPath, relPath);
+  if (!fullPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (type === 'folder') fs.mkdirSync(fullPath, { recursive: true });
+    else fs.writeFileSync(fullPath, '');
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to create' });
+  }
+});
+
+app.post('/api/admin/storage/move', authHeaderOnly, adminOnly, (req, res) => {
+  const { source, destination } = req.body;
+  if (typeof source !== 'string' || typeof destination !== 'string')
+    return res.status(400).json({ error: 'Invalid request' });
+  if (!assertAdminPathAllowed(source) || !assertAdminPathAllowed(destination))
+    return res.status(403).json({ error: 'Access denied' });
+
+  const oldPath = safeJoin(baseVaultPath, source);
+  const newPath = safeJoin(baseVaultPath, destination);
+  if (!oldPath || !newPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const destDir = path.dirname(newPath);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.renameSync(oldPath, newPath);
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to move' });
+  }
+});
+
+app.delete('/api/admin/storage/file', authHeaderOnly, adminOnly, (req, res) => {
+  const relPath = req.query.path as string;
+  if (!relPath) return res.status(400).json({ error: 'Path required' });
+  if (!assertAdminPathAllowed(relPath)) return res.status(403).json({ error: 'Access denied' });
+  const fullPath = safeJoin(baseVaultPath, relPath);
+  if (!fullPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) fs.rmSync(fullPath, { recursive: true, force: true });
+    else fs.unlinkSync(fullPath);
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete' });
+  }
+});
+
+app.post('/api/admin/storage/copy', authHeaderOnly, adminOnly, (req, res) => {
+  const { source, destination } = req.body;
+  if (typeof source !== 'string' || typeof destination !== 'string')
+    return res.status(400).json({ error: 'Invalid request' });
+  if (!assertAdminPathAllowed(source) || !assertAdminPathAllowed(destination))
+    return res.status(403).json({ error: 'Access denied' });
+
+  const srcPath = safeJoin(baseVaultPath, source);
+  const destPath = safeJoin(baseVaultPath, destination);
+  if (!srcPath || !destPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    if (!fs.existsSync(srcPath)) return res.status(404).json({ error: 'Source not found' });
+    const destDir = path.dirname(destPath);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+
+    const stat = fs.statSync(srcPath);
+    if (stat.isDirectory()) fs.cpSync(srcPath, destPath, { recursive: true });
+    else fs.copyFileSync(srcPath, destPath);
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to copy' });
+  }
+});
+
+// Admin file-upload (auth runs BEFORE multer)
+const adminUpload = multer({
+  limits: { fileSize: MAX_UPLOAD_SIZE },
+  storage: multer.diskStorage({
+    destination: (req: any, _file, cb) => {
+      const relPath = (req.query?.path as string) || '';
+      if (relPath && !assertAdminPathAllowed(relPath)) return cb(new Error('Access denied'), '');
+      const abs = relPath ? safeJoin(baseVaultPath, relPath) : baseVaultPath;
+      if (!abs) return cb(new Error('Access denied'), '');
+      if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
+      cb(null, abs);
+    },
+    filename: (_req, file, cb) => cb(null, sanitizeFilename(file.originalname)),
+  }),
+});
+
+app.post('/api/admin/storage/upload', authHeaderOnly, adminOnly, (req, res, next) => {
+  adminUpload.single('file')(req, res, (err) => {
+    if (err) {
+      console.error('[admin upload]', err);
+      return res.status(400).json({ error: err.message || 'Upload failed' });
+    }
+    next();
+  });
+}, (req: any, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  res.json({ success: true });
+});
+
+// =============================================================================
+// Scoped (per-user) File Operations
+// =============================================================================
+
+app.get('/api/files', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  
+
   function scanDir(dir: string, relativePath = '') {
     const nodes: any[] = [];
     const files = fs.readdirSync(dir);
@@ -557,128 +829,112 @@ app.get('/api/files', authenticateToken, (req: any, res) => {
       const stat = fs.statSync(fullPath);
       if (stat.isDirectory()) {
         nodes.push({
-          name: file,
-          path: relPath,
-          type: 'folder',
+          name: file, path: relPath, type: 'folder',
           children: scanDir(fullPath, relPath),
-          createdAt: stat.birthtimeMs,
-          updatedAt: stat.mtimeMs
+          createdAt: stat.birthtimeMs, updatedAt: stat.mtimeMs,
         });
       } else if (file.endsWith('.md') || file.endsWith('.canvas')) {
         nodes.push({
           name: file.replace(/\.(md|canvas)$/, ''),
           path: relPath,
           type: file.endsWith('.canvas') ? 'canvas' : 'file',
-          createdAt: stat.birthtimeMs,
-          updatedAt: stat.mtimeMs
+          createdAt: stat.birthtimeMs, updatedAt: stat.mtimeMs,
         });
       }
     }
     return nodes;
   }
 
-  try {
-    res.json(scanDir(vaultPath));
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to read vault' });
-  }
+  try { res.json(scanDir(vaultPath)); }
+  catch { res.status(500).json({ error: 'Failed to read vault' }); }
 });
 
-app.get('/api/file', authenticateToken, (req: any, res) => {
+app.get('/api/file', authHeaderOrQuery, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const relPath = req.query.path as string;
   if (!relPath) return res.status(400).json({ error: 'Path required' });
 
-  const filePath = path.join(vaultPath, relPath);
-  if (!filePath.startsWith(vaultPath)) return res.status(403).json({ error: 'Access denied' });
+  const filePath = safeJoin(vaultPath, relPath);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    res.status(404).json({ error: 'File not found' });
-  }
+  if (fs.existsSync(filePath)) res.sendFile(filePath);
+  else res.status(404).json({ error: 'File not found' });
 });
 
-app.post('/api/file', authenticateToken, (req: any, res) => {
+app.post('/api/file', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const { path: relPath, content } = req.body;
-  const filePath = path.join(vaultPath, relPath);
-  
-  if (!filePath.startsWith(vaultPath)) return res.status(403).json({ error: 'Access denied' });
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
+
+  const filePath = safeJoin(vaultPath, relPath);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
   try {
-    fs.writeFileSync(filePath, content);
+    fs.writeFileSync(filePath, typeof content === 'string' ? content : '');
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to save file' });
   }
 });
 
-app.post('/api/file/new', authenticateToken, (req: any, res) => {
+app.post('/api/file/new', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const { path: relPath, type } = req.body;
-  const filePath = path.join(vaultPath, relPath);
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
 
-  if (!filePath.startsWith(vaultPath)) return res.status(403).json({ error: 'Access denied' });
+  const filePath = safeJoin(vaultPath, relPath);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  if (type === 'folder') {
-    fs.mkdirSync(filePath, { recursive: true });
-  } else if (type === 'canvas') {
-    fs.writeFileSync(filePath, JSON.stringify({ nodes: [], edges: [] }, null, 2));
-  } else {
-    fs.writeFileSync(filePath, '# New Note');
-  }
+  if (type === 'folder') fs.mkdirSync(filePath, { recursive: true });
+  else if (type === 'canvas') fs.writeFileSync(filePath, JSON.stringify({ nodes: [], edges: [] }, null, 2));
+  else fs.writeFileSync(filePath, '# New Note');
+
   res.json({ success: true });
 });
 
-app.post('/api/file/move', authenticateToken, (req: any, res) => {
+app.post('/api/file/move', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const { source, destination } = req.body;
-  const oldFullPath = path.join(vaultPath, source);
-  const newFullPath = path.join(vaultPath, destination);
+  if (typeof source !== 'string' || typeof destination !== 'string')
+    return res.status(400).json({ error: 'Invalid request' });
 
-  if (!oldFullPath.startsWith(vaultPath) || !newFullPath.startsWith(vaultPath)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+  const oldFullPath = safeJoin(vaultPath, source);
+  const newFullPath = safeJoin(vaultPath, destination);
+  if (!oldFullPath || !newFullPath) return res.status(403).json({ error: 'Access denied' });
 
-  try {
-    fs.renameSync(oldFullPath, newFullPath);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to move/rename' });
-  }
+  try { fs.renameSync(oldFullPath, newFullPath); res.json({ success: true }); }
+  catch { res.status(500).json({ error: 'Failed to move/rename' }); }
 });
 
-app.delete('/api/file', authenticateToken, (req: any, res) => {
+app.delete('/api/file', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const relPath = req.query.path as string;
-  const filePath = path.join(vaultPath, relPath);
+  if (!relPath) return res.status(400).json({ error: 'Path required' });
 
-  if (!filePath.startsWith(vaultPath)) return res.status(403).json({ error: 'Access denied' });
+  const filePath = safeJoin(vaultPath, relPath);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
   try {
     const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) {
-      fs.rmSync(filePath, { recursive: true, force: true });
-    } else {
-      fs.unlinkSync(filePath);
-    }
+    if (stat.isDirectory()) fs.rmSync(filePath, { recursive: true, force: true });
+    else fs.unlinkSync(filePath);
     res.json({ success: true });
-  } catch (error: any) {
-    console.error(`[User File] Failed to delete ${filePath}:`, error);
+  } catch (e) {
+    console.error(`[user file delete]`, e);
     res.status(500).json({ error: 'Failed to delete' });
   }
 });
 
-app.post('/api/file/duplicate', authenticateToken, (req: any, res) => {
+app.post('/api/file/duplicate', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const { path: relPath } = req.body;
-  const oldFullPath = path.join(vaultPath, relPath);
-  
-  if (!oldFullPath.startsWith(vaultPath)) return res.status(403).json({ error: 'Access denied' });
+  if (typeof relPath !== 'string') return res.status(400).json({ error: 'Path required' });
+
+  const oldFullPath = safeJoin(vaultPath, relPath);
+  if (!oldFullPath) return res.status(403).json({ error: 'Access denied' });
 
   const ext = path.extname(relPath);
   const base = relPath.slice(0, -ext.length);
@@ -688,21 +944,23 @@ app.post('/api/file/duplicate', authenticateToken, (req: any, res) => {
     newRelPath = `${base} (copy ${counter})${ext}`;
     counter++;
   }
-  const newFullPath = path.join(vaultPath, newRelPath);
+  const newFullPath = safeJoin(vaultPath, newRelPath);
+  if (!newFullPath) return res.status(403).json({ error: 'Access denied' });
 
-  try {
-    fs.copyFileSync(oldFullPath, newFullPath);
-    res.json({ success: true });
-  } catch (error: any) {
-    console.error(`[User File] Failed to duplicate ${oldFullPath} to ${newFullPath}:`, error);
+  try { fs.copyFileSync(oldFullPath, newFullPath); res.json({ success: true }); }
+  catch (e) {
+    console.error(`[user file duplicate]`, e);
     res.status(500).json({ error: 'Failed to duplicate' });
   }
 });
 
-app.get('/api/links', authenticateToken, (req: any, res) => {
+app.get('/api/links', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const targetPath = req.query.path as string;
   if (!targetPath) return res.status(400).json({ error: 'Path required' });
+
+  const targetFullPath = safeJoin(vaultPath, targetPath);
+  if (!targetFullPath) return res.status(403).json({ error: 'Access denied' });
 
   try {
     const flatFiles: any[] = [];
@@ -713,11 +971,8 @@ app.get('/api/links', authenticateToken, (req: any, res) => {
         const fullPath = path.join(dir, file);
         const relPath = path.join(relativePath, file);
         const stat = fs.statSync(fullPath);
-        if (stat.isDirectory()) {
-          scanDir(fullPath, relPath);
-        } else if (file.endsWith('.md')) {
-          flatFiles.push({ path: relPath, name: file.replace('.md', '') });
-        }
+        if (stat.isDirectory()) scanDir(fullPath, relPath);
+        else if (file.endsWith('.md')) flatFiles.push({ path: relPath, name: file.replace('.md', '') });
       }
     }
     scanDir(vaultPath);
@@ -725,13 +980,10 @@ app.get('/api/links', authenticateToken, (req: any, res) => {
     const backlinks: string[] = [];
     let forwardlinks: string[] = [];
 
-    const targetFullPath = path.join(vaultPath, targetPath);
     if (fs.existsSync(targetFullPath)) {
       const content = fs.readFileSync(targetFullPath, 'utf-8');
       const matches = content.match(/\[\[(.*?)\]\]/g);
-      if (matches) {
-        forwardlinks = matches.map(m => m.slice(2, -2).split('|')[0]);
-      }
+      if (matches) forwardlinks = matches.map((m) => m.slice(2, -2).split('|')[0]);
     }
 
     const targetName = path.basename(targetPath, '.md');
@@ -745,96 +997,106 @@ app.get('/api/links', authenticateToken, (req: any, res) => {
     }
 
     res.json({ backlinks, forwardlinks });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to get links' });
   }
 });
 
-// Multipart Upload (Dynamic)
-const upload = multer({ 
+// =============================================================================
+// User attachment uploads
+// =============================================================================
+
+const userUpload = multer({
+  limits: { fileSize: MAX_UPLOAD_SIZE },
   storage: multer.diskStorage({
-    destination: (req: any, file, cb) => {
-      const { attachmentsPath } = getUserScope(req.user.username);
-      if (!fs.existsSync(attachmentsPath)) {
-        fs.mkdirSync(attachmentsPath, { recursive: true });
+    destination: (req: any, _file, cb) => {
+      try {
+        const { attachmentsPath } = getUserScope(req.user.username);
+        if (!fs.existsSync(attachmentsPath)) fs.mkdirSync(attachmentsPath, { recursive: true });
+        cb(null, attachmentsPath);
+      } catch (e: any) {
+        cb(e, '');
       }
-      cb(null, attachmentsPath);
     },
-    filename: (req, file, cb) => {
-      cb(null, file.originalname);
-    }
-  })
+    filename: (_req, file, cb) => cb(null, sanitizeFilename(file.originalname)),
+  }),
 });
 
-app.post('/api/upload', authenticateToken, (req: any, res: any, next: any) => {
-  upload.single('file')(req, res, (err) => {
+app.post('/api/upload', authHeaderOnly, (req, res, next) => {
+  userUpload.single('file')(req, res, (err) => {
     if (err) {
-      console.error('[Upload Error]', err);
+      console.error('[user upload]', err);
       return res.status(400).json({ error: err.message || 'Upload failed' });
     }
     next();
   });
-}, (req: any, res: any) => {
+}, (req: any, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ path: `attachments/${req.file.originalname}` });
+  res.json({ path: `attachments/${req.file.filename}` });
 });
 
-app.get('/api/attachments/:filename', authenticateToken, (req: any, res) => {
+app.get('/api/attachments/:filename', authHeaderOrQuery, (req: any, res) => {
   const { attachmentsPath } = getUserScope(req.user.username);
-  const filePath = path.join(attachmentsPath, req.params.filename);
-  
-  if (!filePath.startsWith(attachmentsPath)) return res.status(403).json({ error: 'Access denied' });
+  const filePath = safeJoin(attachmentsPath, req.params.filename);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    res.status(404).json({ error: 'Attachment not found' });
-  }
+  if (fs.existsSync(filePath)) res.sendFile(filePath);
+  else res.status(404).json({ error: 'Attachment not found' });
 });
 
-app.get('/api/proxy/iframe', authenticateToken, async (req: any, res: any) => {
+// =============================================================================
+// Iframe proxy (SSRF-guarded)
+// =============================================================================
+
+app.get('/api/proxy/iframe', authHeaderOrQuery, async (req: any, res: any) => {
+  if (!ENABLE_IFRAME_PROXY) return res.status(404).send('Proxy disabled');
   const targetUrl = req.query.url as string;
   if (!targetUrl) return res.status(400).send('No URL provided');
-  
+
+  const parsed = await validateSafeFetchUrl(targetUrl);
+  if (!parsed) {
+    return res.status(400).send('URL is not allowed (must be http/https and non-private).');
+  }
+
   try {
-    const response = await fetch(targetUrl, {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const response = await fetch(parsed.toString(), {
+      signal: controller.signal,
+      redirect: 'manual', // don't auto-follow redirects into private space
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      },
     });
-    
+    clearTimeout(timeout);
+
     const contentType = response.headers.get('content-type') || 'text/html';
-    
-    // For non-HTML, just redirect or pipe
     if (!contentType.includes('text/html')) {
-      return res.redirect(targetUrl);
+      return res.redirect(parsed.toString());
     }
 
     let body = await response.text();
-    
-    // Inject a base tag so relative links and assets load correctly
-    const parsedUrl = new URL(targetUrl);
-    const baseHref = `${parsedUrl.protocol}//${parsedUrl.host}`;
-    
+    const baseHref = `${parsed.protocol}//${parsed.host}`;
     if (body.match(/<head[^>]*>/i)) {
       body = body.replace(/(<head[^>]*>)/i, `$1\n<base href="${baseHref}/">`);
     } else {
       body = `<head><base href="${baseHref}/"></head>` + body;
     }
 
+    // Sandbox the proxied response: block scripts, treat the page as untrusted.
+    res.set('Content-Security-Policy',
+      "sandbox allow-same-origin allow-popups; default-src * 'unsafe-inline' data: blob:; script-src 'none'; object-src 'none'; base-uri *;");
+    res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Type', contentType);
     res.send(body);
-  } catch (error) {
-    res.status(500).send(`
+  } catch {
+    res.status(502).send(`
       <html>
         <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #f9fafb; color: #6b7280; text-align: center;">
           <div>
-            <svg style="width: 48px; height: 48px; margin: 0 auto 16px; opacity: 0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
             <h2 style="margin: 0 0 8px; font-size: 1.125rem; font-weight: 600; color: #374151;">Failed to load preview</h2>
             <p style="margin: 0; font-size: 0.875rem;">The website refused to connect or is invalid.</p>
-            <a href="${targetUrl}" target="_blank" style="display: inline-block; margin-top: 16px; padding: 8px 16px; background: #3b82f6; color: white; border-radius: 6px; text-decoration: none; font-size: 0.875rem; font-weight: 500;">Open in new tab</a>
           </div>
         </body>
       </html>
@@ -842,27 +1104,28 @@ app.get('/api/proxy/iframe', authenticateToken, async (req: any, res: any) => {
   }
 });
 
-app.get('/api/graph', authenticateToken, (req: any, res) => {
+// =============================================================================
+// Graph / Search / Tags
+// =============================================================================
+
+app.get('/api/graph', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  const filterFolder = req.query.folder as string || '';
-  
+  const filterFolder = (req.query.folder as string) || '';
+
   try {
     const nodes: any[] = [];
     const links: any[] = [];
     const nodeSet = new Set<string>();
     const fileNameToPath = new Map<string, string>();
-    
+
     function indexFiles(dir: string, relativePath = '') {
       const files = fs.readdirSync(dir);
       for (const file of files) {
         if (file.startsWith('.')) continue;
         const fullPath = path.join(dir, file);
         const relPath = path.join(relativePath, file);
-        if (fs.statSync(fullPath).isDirectory()) {
-          indexFiles(fullPath, relPath);
-        } else if (file.endsWith('.md')) {
-          fileNameToPath.set(file.replace('.md', ''), relPath);
-        }
+        if (fs.statSync(fullPath).isDirectory()) indexFiles(fullPath, relPath);
+        else if (file.endsWith('.md')) fileNameToPath.set(file.replace('.md', ''), relPath);
       }
     }
 
@@ -873,52 +1136,43 @@ app.get('/api/graph', authenticateToken, (req: any, res) => {
         const fullPath = path.join(dir, file);
         const relPath = path.join(relativePath, file);
         const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory()) {
-          scanDir(fullPath, relPath);
-        } else if (file.endsWith('.md')) {
-          if (filterFolder && !relPath.startsWith(filterFolder)) continue;
+        if (stat.isDirectory()) { scanDir(fullPath, relPath); continue; }
+        if (!file.endsWith('.md')) continue;
+        if (filterFolder && !relPath.startsWith(filterFolder)) continue;
 
-          const id = relPath;
-          const name = file.replace(/\.(md|canvas)$/, '');
-          
-          if (!nodeSet.has(id)) {
-            nodes.push({ id, name });
-            nodeSet.add(id);
-          }
-          
-          const content = fs.readFileSync(fullPath, 'utf-8');
-          const wikiLinkRegex = /\[\[(.*?)\]\]/g;
-          let match;
-          while ((match = wikiLinkRegex.exec(content)) !== null) {
-            let targetName = match[1].split('|')[0].split('#')[0];
-            const targetRelPath = fileNameToPath.get(targetName);
-            if (targetRelPath) {
-              if (!filterFolder || targetRelPath.startsWith(filterFolder)) {
-                links.push({ source: id, target: targetRelPath });
-                if (!nodeSet.has(targetRelPath)) {
-                  nodes.push({ id: targetRelPath, name: targetName });
-                  nodeSet.add(targetRelPath);
-                }
-              }
+        const id = relPath;
+        const name = file.replace(/\.(md|canvas)$/, '');
+        if (!nodeSet.has(id)) { nodes.push({ id, name }); nodeSet.add(id); }
+
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const wikiLinkRegex = /\[\[(.*?)\]\]/g;
+        let match;
+        while ((match = wikiLinkRegex.exec(content)) !== null) {
+          const targetName = match[1].split('|')[0].split('#')[0];
+          const targetRelPath = fileNameToPath.get(targetName);
+          if (targetRelPath && (!filterFolder || targetRelPath.startsWith(filterFolder))) {
+            links.push({ source: id, target: targetRelPath });
+            if (!nodeSet.has(targetRelPath)) {
+              nodes.push({ id: targetRelPath, name: targetName });
+              nodeSet.add(targetRelPath);
             }
           }
         }
       }
     }
-    
+
     indexFiles(vaultPath);
     scanDir(vaultPath);
     res.json({ nodes, links });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Graph failed' });
   }
 });
 
-app.get('/api/search', authenticateToken, (req: any, res) => {
+app.get('/api/search', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  const query = (req.query.q as string || '').toLowerCase();
-  
+  const query = ((req.query.q as string) || '').toLowerCase();
+
   const results: any[] = [];
   const recentFiles: any[] = [];
 
@@ -929,33 +1183,30 @@ app.get('/api/search', authenticateToken, (req: any, res) => {
       const fullPath = path.join(dir, file);
       const relPath = path.join(relativePath, file);
       const stat = fs.statSync(fullPath);
-      
-      if (stat.isDirectory()) {
-        scanDir(fullPath, relPath);
-      } else if (file.endsWith('.md')) {
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        recentFiles.push({ path: relPath, mtime: stat.mtimeMs });
-        if (!query) continue;
+      if (stat.isDirectory()) { scanDir(fullPath, relPath); continue; }
+      if (!file.endsWith('.md')) continue;
 
-        if (file.toLowerCase().includes(query) || content.toLowerCase().includes(query)) {
-          results.push({ path: relPath, content: file });
-        }
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      recentFiles.push({ path: relPath, mtime: stat.mtimeMs });
+      if (!query) continue;
+      if (file.toLowerCase().includes(query) || content.toLowerCase().includes(query)) {
+        results.push({ path: relPath, content: file });
       }
     }
   }
-  
   scanDir(vaultPath);
+
   if (!query) {
     recentFiles.sort((a, b) => b.mtime - a.mtime);
-    res.json(recentFiles.slice(0, 10).map(f => ({ path: f.path, content: 'Recent' })));
+    res.json(recentFiles.slice(0, 10).map((f) => ({ path: f.path, content: 'Recent' })));
   } else {
     res.json(results);
   }
 });
 
-app.get('/api/tags', authenticateToken, (req: any, res) => {
+app.get('/api/tags', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  const tagMap = new Map<string, { count: number, files: Set<string> }>();
+  const tagMap = new Map<string, { count: number; files: Set<string> }>();
 
   function scanDir(dir: string, relativePath = '') {
     const files = fs.readdirSync(dir);
@@ -964,30 +1215,30 @@ app.get('/api/tags', authenticateToken, (req: any, res) => {
       const fullPath = path.join(dir, file);
       const relPath = path.join(relativePath, file);
       const stat = fs.statSync(fullPath);
-      if (stat.isDirectory()) {
-        scanDir(fullPath, relPath);
-      } else if (file.endsWith('.md')) {
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        const tagRegex = /(?:^|\s)#([a-zA-Z0-9_-]+)/g;
-        let match;
-        while ((match = tagRegex.exec(content)) !== null) {
-          const tag = match[1].toLowerCase();
-          if (!tagMap.has(tag)) tagMap.set(tag, { count: 0, files: new Set() });
-          const tagData = tagMap.get(tag)!;
-          tagData.count++;
-          tagData.files.add(relPath);
-        }
+      if (stat.isDirectory()) { scanDir(fullPath, relPath); continue; }
+      if (!file.endsWith('.md')) continue;
+
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      const tagRegex = /(?:^|\s)#([a-zA-Z0-9_-]+)/g;
+      let match;
+      while ((match = tagRegex.exec(content)) !== null) {
+        const tag = match[1].toLowerCase();
+        if (!tagMap.has(tag)) tagMap.set(tag, { count: 0, files: new Set() });
+        const tagData = tagMap.get(tag)!;
+        tagData.count++;
+        tagData.files.add(relPath);
       }
     }
   }
-  
   scanDir(vaultPath);
   res.json(Array.from(tagMap.entries()).map(([tag, data]) => ({
-    tag,
-    count: data.count,
-    files: Array.from(data.files)
+    tag, count: data.count, files: Array.from(data.files),
   })));
 });
+
+// =============================================================================
+// Server Boot
+// =============================================================================
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -999,22 +1250,20 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  // Global Error Handler to intercept errors and prevent HTML leak
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Global error handler — registered last so it sees errors from earlier middleware.
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('[Global Error]', err);
-    if (res.headersSent) {
-      return next(err);
-    }
-    res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+    if (res.headersSent) return next(err);
+    res.status(err.status || 500).json({ error: 'Internal Server Error' });
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[startup] Server listening on http://${HOST}:${PORT}`);
   });
 }
 

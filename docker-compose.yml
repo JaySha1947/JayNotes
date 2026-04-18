@@ -1,0 +1,40 @@
+services:
+  jaynotes:
+    build: .
+    image: jaynotes:latest
+    container_name: jaynotes
+    restart: unless-stopped
+
+    # Bind-mount a host folder as the vault. Change ./data on the left to
+    # wherever you want notes to live on the VPS, e.g. /home/jay/jaynotes-data.
+    # The right side (/data) must match VAULT_PATH set in the Dockerfile.
+    volumes:
+      - ./data:/data
+
+    # Bind to localhost only — Nginx will reverse-proxy to this port with TLS.
+    # If you want to test with direct access, use "3000:3000" instead.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      VAULT_PATH: /data
+      # Required. At least 32 chars. See .env.example for how to generate.
+      JWT_SECRET: ${JWT_SECRET}
+      # The public URL users hit in their browser. Used for CORS.
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
+      # Optional
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-52428800}
+      ENABLE_IFRAME_PROXY: ${ENABLE_IFRAME_PROXY:-true}
+
+    # Drop Linux capabilities and run read-only except for /data and /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.npm
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

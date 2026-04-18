@@ -4,5 +4,11 @@ dist/
 coverage/
 .DS_Store
 *.log
+
+# Env files – keep .env.example but ignore everything else
 .env*
 !.env.example
+
+# Local vault / notes data – must never be committed
+vault/
+data/

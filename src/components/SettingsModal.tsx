@@ -13,6 +13,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [theme, setTheme] = React.useState(localStorage.getItem('jays_notes_theme') || 'Dark');
   const [accentColor, setAccentColor] = React.useState(localStorage.getItem('jays_notes_accent') || '#7d4698');
   const [homeNote, setHomeNote] = React.useState(localStorage.getItem('jays_notes_home') || 'Welcome.md');
+  const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = React.useState<{ type: 'success' | 'error', message: string } | null>(null);
   const userRole = localStorage.getItem('jays_notes_role');
@@ -236,11 +237,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   <p className="text-sm text-text-muted mb-4">Set a new password for your account.</p>
                   
                   <div className="space-y-4 max-w-sm">
+                    <input
+                      type="password"
+                      placeholder="Current Password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      autoComplete="current-password"
+                      className="w-full bg-bg-secondary border border-border-color rounded px-3 py-2 outline-none focus:border-interactive-accent transition-colors text-sm"
+                    />
                     <input 
                       type="password" 
-                      placeholder="New Password"
+                      placeholder="New Password (min 8 characters)"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
                       className="w-full bg-bg-secondary border border-border-color rounded px-3 py-2 outline-none focus:border-interactive-accent transition-colors text-sm"
                     />
                     {passwordChangeStatus && (
@@ -252,8 +262,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     <button 
                       onClick={async () => {
                         setPasswordChangeStatus(null);
-                        if (!newPassword.trim()) {
-                          setPasswordChangeStatus({ type: 'error', message: 'Please enter a new password' });
+                        if (!currentPassword) {
+                          setPasswordChangeStatus({ type: 'error', message: 'Please enter your current password' });
+                          return;
+                        }
+                        if (newPassword.length < 8) {
+                          setPasswordChangeStatus({ type: 'error', message: 'New password must be at least 8 characters' });
                           return;
                         }
                         
@@ -261,14 +275,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                           const res = await apiFetch('/api/auth/change-password', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ newPassword })
+                            body: JSON.stringify({ currentPassword, newPassword })
                           });
+                          const data = await res.json();
                           if (res.ok) {
+                            // Server issues a fresh token after password change so current session stays valid.
+                            if (data.token) {
+                              localStorage.setItem('jays_notes_token', data.token);
+                            }
                             setPasswordChangeStatus({ type: 'success', message: 'Password updated successfully!' });
+                            setCurrentPassword('');
                             setNewPassword('');
                             setTimeout(() => setPasswordChangeStatus(null), 3000);
                           } else {
-                            const data = await res.json();
                             throw new Error(data.error || 'Failed to update password');
                           }
                         } catch (err: any) {
@@ -276,7 +295,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         }
                       }}
                       className="bg-interactive-accent hover:bg-interactive-accent/90 text-white px-4 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
-                      disabled={!newPassword.trim()}
+                      disabled={!currentPassword || newPassword.length < 8}
                     >
                       Update Password
                     </button>
