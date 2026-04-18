@@ -80,7 +80,6 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
-  const lastClickRef = useRef<{ nodeId: string | null; time: number }>({ nodeId: null, time: 0 });
   const [hoverNode, setHoverNode] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(true);
 
@@ -137,18 +136,30 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
   }, []);
 
   useEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+
     const updateDimensions = () => {
-      if (containerRef.current) {
-        setDimensions({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        });
-      }
+      setDimensions({
+        width: el.offsetWidth,
+        height: el.offsetHeight,
+      });
     };
 
     updateDimensions();
+
+    // ResizeObserver catches container size changes that window 'resize' misses
+    // (sidebar toggles, tab changes, flex reflows, etc.). If dimensions don't
+    // match the actual rendered canvas size, the library's pointer-to-canvas
+    // coordinate mapping can point at the wrong place and clicks miss.
+    const ro = new ResizeObserver(() => updateDimensions());
+    ro.observe(el);
     window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', updateDimensions);
+    };
   }, []);
 
   const isLight = document.documentElement.classList.contains('light');
@@ -298,21 +309,7 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
             ctx.fill();
           }}
           backgroundColor={bgColor}
-          onNodeClick={(node) => {
-            // Manual double-click detection: react-force-graph-2d has no onNodeDoubleClick.
-            // Open the file only if the same node is clicked twice within 350ms.
-            const now = Date.now();
-            const nodeId = node.id as string;
-            if (
-              lastClickRef.current.nodeId === nodeId &&
-              now - lastClickRef.current.time < 350
-            ) {
-              onNodeClick(nodeId);
-              lastClickRef.current = { nodeId: null, time: 0 };
-            } else {
-              lastClickRef.current = { nodeId, time: now };
-            }
-          }}
+          onNodeClick={(node) => onNodeClick(node.id as string)}
           onNodeHover={(node) => setHoverNode(node ? (node.id as string) : null)}
           nodeRelSize={6}
           linkWidth={(link: any) => {
