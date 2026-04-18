@@ -136,30 +136,18 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
   }, []);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-
     const updateDimensions = () => {
-      setDimensions({
-        width: el.offsetWidth,
-        height: el.offsetHeight,
-      });
+      if (containerRef.current) {
+        setDimensions({
+          width: containerRef.current.offsetWidth,
+          height: containerRef.current.offsetHeight,
+        });
+      }
     };
 
     updateDimensions();
-
-    // ResizeObserver catches container size changes that window 'resize' misses
-    // (sidebar toggles, tab changes, flex reflows, etc.). If dimensions don't
-    // match the actual rendered canvas size, the library's pointer-to-canvas
-    // coordinate mapping can point at the wrong place and clicks miss.
-    const ro = new ResizeObserver(() => updateDimensions());
-    ro.observe(el);
     window.addEventListener('resize', updateDimensions);
-
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', updateDimensions);
-    };
+    return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
   const isLight = document.documentElement.classList.contains('light');
@@ -297,16 +285,6 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
               ctx.fillStyle = hoverNode && node.id !== hoverNode && !neighbors.get(hoverNode)?.has(node.id) ? mutedColor : textColor;
               ctx.fillText(label, node.x, node.y + 10);
             }
-          }}
-          nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
-            // Paint the hit-detection region for this node on the shadow canvas.
-            // The library passes `color` = this node's unique index color; we MUST use it as-is
-            // so the library can look up which node the pointer is over by reading that pixel.
-            // Radius slightly larger than the visible 6 gives a small click-tolerance buffer.
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, 8, 0, 2 * Math.PI, false);
-            ctx.fill();
           }}
           backgroundColor={bgColor}
           onNodeClick={(node) => onNodeClick(node.id as string)}
