@@ -1,0 +1,167 @@
+== Starting server ==
+server pid=211
+server ready after 6s
+
+===============================================
+Test 1: GET /api/auth/status on fresh vault
+===============================================
+response: {"needsBootstrap":true}
+  [PASS] fresh vault reports needsBootstrap:true
+
+===============================================
+Test 2: Bootstrap with valid user
+===============================================
+response: {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIiwidG9rZW5WZXJzaW9uIjowLCJpYXQiOjE3NzY0ODM1MjQsImV4cCI6MTc3OTA3NTUyNH0.SRo15u00T9zgvDQsRe3mxZ45QrKxALWYRYW5sE6CW7w","role":"admin","username":"admin"}
+  [PASS] bootstrap returns token + role=admin
+
+===============================================
+Test 3: Repeat bootstrap should 403
+===============================================
+http: 403  body: {"error":"System already bootstrapped"}
+  [PASS] repeat bootstrap → 403
+
+===============================================
+Test 4: Login wrong password → 401 (timing-safe)
+===============================================
+valid-user wrong-pw: HTTP=401 time=525ms body={"error":"Invalid credentials"}
+bogus-user wrong-pw: HTTP=401 time=526ms body={"error":"Invalid credentials"}
+  [PASS] both bad-login paths return 401
+  [PASS] both paths hit bcrypt (>30ms): valid=525ms bogus=526ms
+
+===============================================
+Test 5: Login with correct password → token
+===============================================
+response: {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIiwidG9rZW5WZXJzaW9uIjowLCJpYXQiOjE3NzY0ODM1MjYsImV4cCI6MTc3OTA3NTUyNn0.F9eFNl6Q040-Scirv0QI03dIeF4p8Ky1_TZOOp1adaM","role":"admin","username":"admin"}
+  [PASS] correct login returns token
+
+===============================================
+Test 6: GET /api/files unauth → 401; with token → 200
+===============================================
+unauth: HTTP=401 body={"error":"Unauthorized"}
+  [PASS] /api/files without auth → 401
+auth'd: HTTP=200 body-first-200chars=[{"name":"Templates","path":"Templates","type":"folder","children":[{"name":"Daily Note","path":"Templates/Daily Note.md","type":"file","createdAt":0,"updatedAt":1776483526596.636}],"createdAt":0,"upd
+  [PASS] /api/files with token → 200
+
+===============================================
+Test 7: Path traversal on /api/file → 400/403
+===============================================
+  path='../.users.json' → HTTP=403 body={"error":"Access denied"}
+  path='../../etc/passwd' → HTTP=403 body={"error":"Access denied"}
+  path='..%2F.users.json' → HTTP=404 body={"error":"File not found"}
+  path='foo/../../.users.json' → HTTP=403 body={"error":"Access denied"}
+  [PASS] path traversal blocked on /api/file
+admin storage dotfile: HTTP=403 body={"error":"Access denied"}
+  [PASS] admin storage /api/admin/storage/file?path=.users.json → 403 (dotfile blocked)
+
+===============================================
+Test 8: SSRF loopback blocked
+===============================================
+loopback: HTTP=400 body-first-200=URL is not allowed (must be http/https and non-private).
+  [PASS] SSRF loopback (127.0.0.1) blocked
+localhost: HTTP=400
+  [PASS] SSRF localhost blocked
+
+===============================================
+Test 9: SSRF cloud metadata blocked
+===============================================
+metadata: HTTP=400 body-first-200=URL is not allowed (must be http/https and non-private).
+  [PASS] SSRF cloud metadata (169.254.169.254) blocked
+  [PASS] SSRF RFC1918 10.0.0.1 blocked
+
+===============================================
+Test 10: Username validation on bootstrap
+===============================================
+  username='../evil' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  username='bad/slash' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  username='bad name' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  username='ab' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  username='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  username='has.dot' → HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  [PASS] username validator rejects traversal / slashes / spaces / dots / too-short / too-long
+
+  (testing bootstrap with ../evil on a fresh vault)
+  bootstrap '../evil': HTTP=400 body={"error":"Username must be 3-32 characters: letters, numbers, underscore, or dash."}
+  [PASS] bootstrap rejects '../evil' username → 400
+  re-bootstrapped, token-len=196
+
+===============================================
+Test 11: Rate limit on /api/auth/login
+===============================================
+  attempt 1 → HTTP=401
+  attempt 2 → HTTP=401
+  attempt 3 → HTTP=401
+  attempt 4 → HTTP=401
+  attempt 5 → HTTP=401
+  attempt 6 → HTTP=401
+  attempt 7 → HTTP=401
+  attempt 8 → HTTP=401
+  attempt 9 → HTTP=401
+  attempt 10 → HTTP=401
+  attempt 11 → HTTP=401
+  attempt 12 → HTTP=401
+  attempt 13 → HTTP=401
+  attempt 14 → HTTP=401
+  attempt 15 → HTTP=401
+  attempt 16 → HTTP=401
+  attempt 17 → HTTP=401
+  attempt 18 → HTTP=401
+  attempt 19 → HTTP=429
+  [PASS] rate limiter kicks in at attempt #19 (expected ~21)
+
+===============================================
+Test 12: Change password requires current password
+===============================================
+wrong current: HTTP=401 body={"error":"Current password is incorrect"}
+  [PASS] change-password with wrong current → 401
+right current: {"success":true,"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIiwidG9rZW5WZXJzaW9uIjoxLCJpYXQiOjE3NzY0ODM1NDgsImV4cCI6MTc3OTA3NTU0OH0.90SOBoBG5vOwx8Hc7DASXQQg2Z15_2LUspX13HL1-ok"}
+  [PASS] change-password with right current → new token issued
+old token on /api/files: HTTP=401
+  [PASS] old token rejected after password change (tokenVersion bump)
+new token on /api/files: HTTP=200
+  [PASS] new token works on /api/files
+
+===============================================
+Test 13: Zip-slip defense
+===============================================
+wrote /tmp/malicious.zip
+upload resp: {"success":true}
+unzip: HTTP=200 body={"success":true}
+  [FAIL] zip-slip: malicious archive rejected :: got HTTP 200
+  [PASS] zip-slip: no file escaped the vault
+
+===============================================
+SUMMARY
+===============================================
+PASS  fresh vault reports needsBootstrap:true
+PASS  bootstrap returns token + role=admin
+PASS  repeat bootstrap → 403
+PASS  both bad-login paths return 401
+PASS  both paths hit bcrypt (>30ms): valid=525ms bogus=526ms
+PASS  correct login returns token
+PASS  /api/files without auth → 401
+PASS  /api/files with token → 200
+PASS  path traversal blocked on /api/file
+PASS  admin storage /api/admin/storage/file?path=.users.json → 403 (dotfile blocked)
+PASS  SSRF loopback (127.0.0.1) blocked
+PASS  SSRF localhost blocked
+PASS  SSRF cloud metadata (169.254.169.254) blocked
+PASS  SSRF RFC1918 10.0.0.1 blocked
+PASS  username validator rejects traversal / slashes / spaces / dots / too-short / too-long
+PASS  bootstrap rejects '../evil' username → 400
+PASS  rate limiter kicks in at attempt #19 (expected ~21)
+PASS  change-password with wrong current → 401
+PASS  change-password with right current → new token issued
+PASS  old token rejected after password change (tokenVersion bump)
+PASS  new token works on /api/files
+FAIL  zip-slip: malicious archive rejected  -- got HTTP 200
+PASS  zip-slip: no file escaped the vault
+
+Total: 23  Passed: 22  Failed: 1
+
+---- last 30 lines of server log ----
+[startup] Vault path:     /tmp/vault
+[startup] Allowed origin: http://localhost:3100
+[startup] Port:           3100
+[startup] Server listening on http://127.0.0.1:3100
+
+== Killing server ==
