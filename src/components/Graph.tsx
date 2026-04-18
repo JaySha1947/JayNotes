@@ -80,6 +80,7 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastClickRef = useRef<{ nodeId: string | null; time: number }>({ nodeId: null, time: 0 });
   const [hoverNode, setHoverNode] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(true);
 
@@ -286,8 +287,32 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
               ctx.fillText(label, node.x, node.y + 10);
             }
           }}
+          nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
+            // Paint the hit-detection region for this node on the shadow canvas.
+            // The library passes `color` = this node's unique index color; we MUST use it as-is
+            // so the library can look up which node the pointer is over by reading that pixel.
+            // Radius slightly larger than the visible 6 gives a small click-tolerance buffer.
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, 8, 0, 2 * Math.PI, false);
+            ctx.fill();
+          }}
           backgroundColor={bgColor}
-          onNodeClick={(node) => onNodeClick(node.id as string)}
+          onNodeClick={(node) => {
+            // Manual double-click detection: react-force-graph-2d has no onNodeDoubleClick.
+            // Open the file only if the same node is clicked twice within 350ms.
+            const now = Date.now();
+            const nodeId = node.id as string;
+            if (
+              lastClickRef.current.nodeId === nodeId &&
+              now - lastClickRef.current.time < 350
+            ) {
+              onNodeClick(nodeId);
+              lastClickRef.current = { nodeId: null, time: 0 };
+            } else {
+              lastClickRef.current = { nodeId, time: now };
+            }
+          }}
           onNodeHover={(node) => setHoverNode(node ? (node.id as string) : null)}
           nodeRelSize={6}
           linkWidth={(link: any) => {
