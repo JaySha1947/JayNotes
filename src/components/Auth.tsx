@@ -73,7 +73,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     <div className="min-h-screen flex items-center justify-center bg-bg-primary text-text-normal p-4">
       <div className="w-full max-w-md bg-bg-secondary border border-border-color rounded-xl shadow-2xl p-8">
         <div className="text-center mb-8">
-          <img src="https://i.postimg.cc/50VLfmnc/logo.png" alt="Jay's Apex" className="h-40 mx-auto object-contain" referrerPolicy="no-referrer" />
+          <img src="https://raw.githubusercontent.com/JaySha1947/JayNotes-20260218/refs/heads/main/logo.png" alt="Jay's Apex" className="h-40 mx-auto object-contain" referrerPolicy="no-referrer" />
           <p className="text-text-muted mt-2">
             {mode === 'login' ? 'Sign in to your private vault' : 'Initial Setup: Create Admin Account'}
           </p>
