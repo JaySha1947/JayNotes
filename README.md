@@ -1,5 +1,8 @@
 # JayNotes
 
+<img width="385" height="148" alt="logo" src="https://github.com/user-attachments/assets/08c1cc3c-a334-44f4-8e4e-f94dcbac79af" />
+
+
 A self-hosted, browser-based markdown note-taking app backed by a plain
 filesystem vault. Notes are just `.md` files on disk — no database, no
 proprietary format, no lock-in. Ships with a built-in admin UI for managing
