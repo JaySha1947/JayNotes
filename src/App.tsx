@@ -290,7 +290,11 @@ export default function App() {
     if (theme === 'Light') {
       document.documentElement.classList.add('light');
     }
-    const accent = localStorage.getItem('jays_notes_accent');
+    let accent = localStorage.getItem('jays_notes_accent');
+    if (accent === '#7d4698' || accent === '#D85A30') {
+      accent = '#00c882';
+      localStorage.setItem('jays_notes_accent', accent);
+    }
     if (accent) {
       document.documentElement.style.setProperty('--interactive-accent', accent);
     }
@@ -1126,13 +1130,23 @@ export default function App() {
               ) : activeTab.type === 'admin' ? (
                 <AdminDashboard />
               ) : activeTab.type === 'profile' ? (
-                <div className="h-full bg-bg-primary flex items-center justify-center p-8">
-                  <div className="w-full max-w-md bg-bg-secondary border border-border-color rounded-xl p-8 shadow-xl">
-                    <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                       <User className="text-interactive-accent" />
-                       User Profile
-                    </h2>
-                    <div className="space-y-6">
+                <div className="h-full bg-bg-primary flex items-center justify-center p-8 relative">
+                  <div className="w-full max-w-md bg-bg-secondary border border-border-color rounded-xl shadow-xl overflow-hidden">
+                    <div className="flex items-center justify-between p-6 border-b border-border-color bg-bg-primary/30">
+                      <h2 className="text-xl font-bold flex items-center gap-2">
+                        <User className="text-interactive-accent" />
+                        My Profile
+                      </h2>
+                      <button 
+                        onClick={() => handleCloseTab({ stopPropagation: () => {} } as any, 'profile-settings')}
+                        className="p-1.5 text-text-muted hover:text-error hover:bg-error/10 rounded-md transition-all"
+                        title="Close Profile"
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+                    
+                    <div className="p-8 space-y-6">
                       <div className="p-4 bg-bg-primary rounded-lg border border-border-color">
                         <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">Username</label>
                         <div className="text-lg font-medium">{username}</div>

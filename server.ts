@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import archiver from 'archiver';
 import AdmZip from 'adm-zip';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import { promises as dnsPromises } from 'dns';
 import net from 'net';
 import crypto from 'crypto';
@@ -24,6 +25,7 @@ const baseVaultPath = path.resolve(
   process.env.VAULT_PATH || path.join(process.cwd(), 'vault')
 );
 
+// FIX: No fallback secret — fail loudly in ALL environments, not just production.
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET || JWT_SECRET.length < 32) {
   console.error('\nFATAL: JWT_SECRET environment variable is required and must be at least 32 characters long.');
@@ -35,6 +37,18 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
 const MAX_UPLOAD_SIZE = Number(process.env.MAX_UPLOAD_SIZE) || 50 * 1024 * 1024; // 50 MB
 const BCRYPT_ROUNDS = 12;
 const ENABLE_IFRAME_PROXY = process.env.ENABLE_IFRAME_PROXY !== 'false';
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
+// Allowed MIME types for user uploads
+const ALLOWED_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  'image/avif', 'image/heic', 'image/heif',
+  'application/pdf',
+  'text/plain', 'text/markdown', 'text/csv',
+  'application/zip', 'application/x-zip-compressed',
+  'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4',
+  'video/mp4', 'video/webm', 'video/ogg',
+]);
 
 const usersFile = path.join(baseVaultPath, '.users.json');
 
@@ -53,7 +67,6 @@ console.log(`[startup] Port:           ${PORT}`);
 /**
  * Safely resolve a user-supplied relative path against a root directory.
  * Returns null if the result would escape the root (path-traversal guard).
- * Uses path.resolve + exact-match check with trailing separator.
  */
 function safeJoin(root: string, rel: string): string | null {
   if (typeof rel !== 'string') return null;
@@ -90,20 +103,19 @@ function sanitizeFilename(name: string): string {
 /** Identify private/loopback/link-local addresses to prevent SSRF. */
 function isPrivateAddress(ip: string): boolean {
   if (!net.isIP(ip)) return true;
-  if (ip === '127.0.0.1' || ip === '0.0.0.0') return true;
+  if (ip === '127.0.0.1' || ip === '0.0.0.0' || ip === '::1' || ip === '::') return true;
   if (ip.startsWith('10.')) return true;
   if (ip.startsWith('192.168.')) return true;
   if (ip.startsWith('169.254.')) return true; // link-local incl. cloud metadata
   const m = ip.match(/^172\.(\d+)\./);
   if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
-  if (ip === '::1' || ip === '::') return true;
   const low = ip.toLowerCase();
   if (low.startsWith('fc') || low.startsWith('fd')) return true;
   if (low.startsWith('fe80:')) return true;
   return false;
 }
 
-/** Validate a URL before fetching it on behalf of a user. */
+/** Validate a URL before fetching it on behalf of a user (SSRF guard). */
 async function validateSafeFetchUrl(rawUrl: string): Promise<URL | null> {
   let parsed: URL;
   try {
@@ -176,6 +188,13 @@ const getUserScope = (username: string) => {
 const app = express();
 app.set('trust proxy', 1); // trust Nginx / reverse proxy for correct client IPs
 
+// FIX: Security headers via helmet (covers X-Frame-Options, Referrer-Policy,
+// X-Content-Type-Options, Strict-Transport-Security, etc.)
+app.use(helmet({
+  contentSecurityPolicy: false, // We set our own per-route where needed
+  crossOriginEmbedderPolicy: false, // needed for iframe proxy
+}));
+
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: false }));
 app.use(express.json({ limit: '10mb' }));
 
@@ -211,8 +230,6 @@ function verifyTokenAndAttachUser(token: string | null, req: any, res: any, next
       return res.status(401).json({ error: 'User account no longer exists' });
     }
 
-    // If the user's tokenVersion has been bumped (password change/reset),
-    // all tokens issued before the bump are rejected.
     const tokenVersion = tokenUser.tokenVersion ?? -1;
     const currentVersion = userRecord.tokenVersion ?? 0;
     if (tokenVersion !== currentVersion) {
@@ -224,7 +241,7 @@ function verifyTokenAndAttachUser(token: string | null, req: any, res: any, next
   });
 }
 
-/** Accept JWT only from the Authorization header. Use for all JSON/state-changing routes. */
+/** Accept JWT only from the Authorization header. */
 function authHeaderOnly(req: any, res: any, next: any) {
   const authHeader = req.headers['authorization'];
   const match = authHeader && /^Bearer (.+)$/.exec(authHeader);
@@ -330,7 +347,6 @@ app.post('/api/auth/change-password', authHeaderOnly, async (req: any, res) => {
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   saveUsers(users);
 
-  // Reissue a fresh token so the caller's session continues uninterrupted.
   const token = issueToken(req.user.username, user.role, user.tokenVersion);
   res.json({ success: true, token });
 });
@@ -371,10 +387,7 @@ app.post('/api/admin/users', authHeaderOnly, adminOnly, async (req, res) => {
     createdAt: new Date().toISOString(),
   };
   saveUsers(users);
-
-  // Pre-initialize user's folder
   getUserScope(username);
-
   res.json({ success: true });
 });
 
@@ -404,7 +417,6 @@ app.post('/api/admin/users/reset', authHeaderOnly, adminOnly, async (req, res) =
   if (!users[username]) return res.status(404).json({ error: 'User not found' });
 
   users[username].password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-  // Invalidate any existing sessions for this user.
   users[username].tokenVersion = (users[username].tokenVersion ?? 0) + 1;
   saveUsers(users);
   res.json({ success: true });
@@ -421,7 +433,6 @@ app.delete('/api/admin/users/:username', authHeaderOnly, adminOnly, (req: any, r
   delete users[username];
   saveUsers(users);
 
-  // Archive the user's folder rather than deleting outright.
   const userDir = path.join(baseVaultPath, username);
   const archiveDir = path.join(baseVaultPath, `.archive_${username}_${Date.now()}`);
   if (fs.existsSync(userDir)) {
@@ -435,13 +446,12 @@ app.delete('/api/admin/users/:username', authHeaderOnly, adminOnly, (req: any, r
 // Admin: Storage
 // =============================================================================
 
-/** Hide all dotfiles from the admin file explorer (e.g. .users.json, .archive_*) */
 function isHiddenFromAdmin(name: string): boolean {
   return name.startsWith('.');
 }
 
 function assertAdminPathAllowed(relPath: string): boolean {
-  const parts = relPath.split(/[\\/]+/).filter(Boolean);
+  const parts = relPath.split(/[\\\/]+/).filter(Boolean);
   return !parts.some(isHiddenFromAdmin);
 }
 
@@ -525,7 +535,6 @@ app.post('/api/admin/storage/download-bulk', authHeaderOnly, adminOnly, (req, re
 
     const stat = fs.statSync(fullPath);
     const baseName = path.basename(fullPath);
-
     if (stat.isDirectory()) archive.directory(fullPath, baseName);
     else archive.file(fullPath, { name: baseName });
   }
@@ -546,7 +555,6 @@ app.post('/api/admin/storage/zip', authHeaderOnly, adminOnly, (req, res) => {
   const zipFileName = cleanName.endsWith('.zip') ? cleanName : `${cleanName}.zip`;
   const zipPath = path.join(path.dirname(firstAbs), zipFileName);
 
-  // Ensure the destination is still inside the vault.
   if (!safeJoin(baseVaultPath, path.relative(baseVaultPath, zipPath))) {
     return res.status(403).json({ error: 'Access denied' });
   }
@@ -571,7 +579,6 @@ app.post('/api/admin/storage/zip', authHeaderOnly, adminOnly, (req, res) => {
 
     const stat = fs.statSync(fullPath);
     const baseName = path.basename(fullPath);
-
     if (stat.isDirectory()) archive.directory(fullPath, baseName);
     else archive.file(fullPath, { name: baseName });
   }
@@ -632,49 +639,29 @@ app.post('/api/admin/storage/unzip', authHeaderOnly, adminOnly, (req, res) => {
 
   try {
     const zip = new AdmZip(fullPath);
-    // Zip-slip defense: pre-scan all entries and fail closed if ANY entry
-    // would resolve outside the destination directory. We do NOT extract
-    // partially — if the archive contains even one unsafe entry, the whole
-    // archive is rejected with 400.
     const destResolved = path.resolve(destPath);
+
     for (const entry of zip.getEntries()) {
       const rawName = entry.entryName;
-      // Belt-and-suspenders syntactic checks on the raw entry name, before
-      // we let path.resolve() interpret it:
-      //   1. No absolute paths (POSIX "/..." or Windows "C:\..." / "\...").
-      //   2. No ".." components anywhere in the path (covers "../x",
-      //      "a/../../x", "./../x", and backslash-separated variants).
-      //   3. No NUL bytes (defense-in-depth against odd filesystems).
+      // FIX: Belt-and-suspenders zip-slip defense
       const normalized = rawName.replace(/\\/g, '/');
       const isAbsolute =
-        normalized.startsWith('/') || /^[a-zA-Z]:[\/]/.test(normalized);
-      const hasParentRef = normalized
-        .split('/')
-        .some((seg) => seg === '..');
+        normalized.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(normalized);
+      const hasParentRef = normalized.split('/').some((seg) => seg === '..');
       const hasNul = rawName.includes('\0');
+
       if (isAbsolute || hasParentRef || hasNul) {
-        console.warn(
-          `[unzip] rejecting archive: unsafe entry name ${JSON.stringify(rawName)}`
-        );
-        return res
-          .status(400)
-          .json({ error: 'Archive contains unsafe entries' });
+        console.warn(`[unzip] rejecting archive: unsafe entry name ${JSON.stringify(rawName)}`);
+        return res.status(400).json({ error: 'Archive contains unsafe entries' });
       }
-      // Primary check: resolve the entry path and confirm it is inside the
-      // destination. This catches anything the syntactic checks missed.
+
       const entryPath = path.resolve(destResolved, rawName);
-      if (
-        entryPath !== destResolved &&
-        !entryPath.startsWith(destResolved + path.sep)
-      ) {
-        console.warn(
-          `[unzip] rejecting archive: entry ${JSON.stringify(rawName)} resolves to ${entryPath}, outside ${destResolved}`
-        );
-        return res
-          .status(400)
-          .json({ error: 'Archive contains unsafe entries' });
+      if (entryPath !== destResolved && !entryPath.startsWith(destResolved + path.sep)) {
+        console.warn(`[unzip] rejecting: ${JSON.stringify(rawName)} resolves outside vault`);
+        return res.status(400).json({ error: 'Archive contains unsafe entries' });
       }
     }
+
     zip.extractAllTo(destPath, true);
     res.json({ success: true });
   } catch (e: any) {
@@ -783,9 +770,21 @@ app.post('/api/admin/storage/copy', authHeaderOnly, adminOnly, (req, res) => {
   }
 });
 
+// FIX: MIME type validation added to multer file filter
+function multerMimeFilter(allowedTypes: Set<string>) {
+  return (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (allowedTypes.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type '${file.mimetype}' is not allowed`));
+    }
+  };
+}
+
 // Admin file-upload (auth runs BEFORE multer)
 const adminUpload = multer({
   limits: { fileSize: MAX_UPLOAD_SIZE },
+  fileFilter: multerMimeFilter(ALLOWED_MIME_TYPES),
   storage: multer.diskStorage({
     destination: (req: any, _file, cb) => {
       const relPath = (req.query?.path as string) || '';
@@ -870,6 +869,8 @@ app.post('/api/file', authHeaderOnly, (req: any, res) => {
   if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
   try {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(filePath, typeof content === 'string' ? content : '');
     res.json({ success: true });
   } catch {
@@ -924,6 +925,25 @@ app.delete('/api/file', authHeaderOnly, (req: any, res) => {
     res.json({ success: true });
   } catch (e) {
     console.error(`[user file delete]`, e);
+    res.status(500).json({ error: 'Failed to delete' });
+  }
+});
+
+app.post('/api/file/delete', authHeaderOnly, (req: any, res) => {
+  const { vaultPath } = getUserScope(req.user.username);
+  const relPath = req.body.path as string;
+  if (!relPath) return res.status(400).json({ error: 'Path required' });
+
+  const filePath = safeJoin(vaultPath, relPath);
+  if (!filePath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) fs.rmSync(filePath, { recursive: true, force: true });
+    else fs.unlinkSync(filePath);
+    res.json({ success: true });
+  } catch (e) {
+    console.error(`[user file delete post]`, e);
     res.status(500).json({ error: 'Failed to delete' });
   }
 });
@@ -1008,6 +1028,7 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
 
 const userUpload = multer({
   limits: { fileSize: MAX_UPLOAD_SIZE },
+  fileFilter: multerMimeFilter(ALLOWED_MIME_TYPES),
   storage: multer.diskStorage({
     destination: (req: any, _file, cb) => {
       try {
@@ -1040,8 +1061,14 @@ app.get('/api/attachments/:filename', authHeaderOrQuery, (req: any, res) => {
   const filePath = safeJoin(attachmentsPath, req.params.filename);
   if (!filePath) return res.status(403).json({ error: 'Access denied' });
 
-  if (fs.existsSync(filePath)) res.sendFile(filePath);
-  else res.status(404).json({ error: 'Attachment not found' });
+  if (fs.existsSync(filePath)) {
+    // FIX: Set Content-Disposition to prevent MIME-sniff XSS via uploaded files
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ error: 'Attachment not found' });
+  }
 });
 
 // =============================================================================
@@ -1071,9 +1098,20 @@ app.get('/api/proxy/iframe', authHeaderOrQuery, async (req: any, res: any) => {
     });
     clearTimeout(timeout);
 
+    // FIX: For redirects, validate the redirect target before following
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) return res.status(502).send('Invalid redirect');
+      const redirectTarget = await validateSafeFetchUrl(
+        location.startsWith('http') ? location : `${parsed.protocol}//${parsed.host}${location}`
+      );
+      if (!redirectTarget) return res.status(400).send('Redirect target is not allowed.');
+      return res.redirect(redirectTarget.toString());
+    }
+
     const contentType = response.headers.get('content-type') || 'text/html';
     if (!contentType.includes('text/html')) {
-      return res.redirect(parsed.toString());
+      return res.status(400).send('Only HTML content can be proxied.');
     }
 
     let body = await response.text();
@@ -1084,7 +1122,6 @@ app.get('/api/proxy/iframe', authHeaderOrQuery, async (req: any, res: any) => {
       body = `<head><base href="${baseHref}/"></head>` + body;
     }
 
-    // Sandbox the proxied response: block scripts, treat the page as untrusted.
     res.set('Content-Security-Policy',
       "sandbox allow-same-origin allow-popups; default-src * 'unsafe-inline' data: blob:; script-src 'none'; object-src 'none'; base-uri *;");
     res.set('X-Content-Type-Options', 'nosniff');
@@ -1209,6 +1246,7 @@ app.get('/api/tags', authHeaderOnly, (req: any, res) => {
   const tagMap = new Map<string, { count: number; files: Set<string> }>();
 
   function scanDir(dir: string, relativePath = '') {
+    if (!fs.existsSync(dir)) return;
     const files = fs.readdirSync(dir);
     for (const file of files) {
       if (file.startsWith('.')) continue;
@@ -1236,12 +1274,32 @@ app.get('/api/tags', authHeaderOnly, (req: any, res) => {
   })));
 });
 
+app.get('/api/templates', authHeaderOnly, (req: any, res) => {
+  const { templatesPath, vaultPath } = getUserScope(req.user.username);
+  if (!fs.existsSync(templatesPath)) return res.json([]);
+
+  try {
+    const files = fs.readdirSync(templatesPath);
+    const templates = files
+      .filter(f => f.endsWith('.md'))
+      .map(f => ({
+        name: f.replace('.md', ''),
+        path: path.relative(vaultPath, path.join(templatesPath, f)),
+        type: 'template'
+      }));
+    res.json(templates);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
 // =============================================================================
 // Server Boot
 // =============================================================================
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (IS_DEV) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1255,7 +1313,7 @@ async function startServer() {
     });
   }
 
-  // Global error handler — registered last so it sees errors from earlier middleware.
+  // Global error handler — registered last
   app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('[Global Error]', err);
     if (res.headersSent) return next(err);

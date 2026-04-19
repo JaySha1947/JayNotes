@@ -1,24 +1,28 @@
 # syntax=docker/dockerfile:1
 
 # -----------------------------------------------------------------------------
-# Stage 1: build the frontend with Vite
+# Stage 1: build frontend (Vite) + compile server TypeScript
 # -----------------------------------------------------------------------------
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
 # Install all deps (including dev) for the build.
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
-# Copy the rest of the source.
+# Copy source.
 COPY . .
 
 # Build the SPA → dist/
 RUN npm run build
 
+# Compile server.ts → dist-server/server.js
+# tsconfig.server.json targets CommonJS for Node compatibility
+RUN npx tsc --project tsconfig.server.json
+
 # -----------------------------------------------------------------------------
-# Stage 2: minimal runtime image
+# Stage 2: minimal runtime image — no dev tools, no TypeScript compiler
 # -----------------------------------------------------------------------------
 FROM node:20-alpine AS runtime
 
@@ -29,19 +33,15 @@ RUN addgroup -S jaynotes && adduser -S jaynotes -G jaynotes
 
 WORKDIR /app
 
-# Copy manifests and install *only* production deps.
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+# Install only production deps.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
-# Pull in the compiled frontend and the server source.
+# Pull in the compiled frontend and compiled server.
 COPY --from=builder /app/dist ./dist
-COPY server.ts ./server.ts
-COPY tsconfig.json ./tsconfig.json
+COPY --from=builder /app/dist-server ./dist-server
 
-# tsx runs TS directly in production (no need for a separate compile step).
-RUN npm install tsx --omit=dev --no-audit --no-fund
-
-# The vault lives under /data so you can bind-mount a host folder into it.
+# The vault lives under /data — bind-mount a host folder into it.
 RUN mkdir -p /data && chown -R jaynotes:jaynotes /app /data
 
 USER jaynotes
@@ -52,8 +52,8 @@ ENV HOST=0.0.0.0
 
 EXPOSE 3000
 
-# Basic health check - container reports unhealthy if the API is down.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Health check — fails fast if server isn't responding.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -q --spider http://localhost:3000/api/auth/status || exit 1
 
-CMD ["npx", "tsx", "server.ts"]
+CMD ["node", "dist-server/server.js"]

@@ -935,7 +935,7 @@ const CustomEdge = ({
     '6': '#a855f7',
   };
 
-  const edgeColor = data?.color ? (colors[data.color as string] || data.color as string) : '#7d4698';
+  const edgeColor = data?.color ? (colors[data.color as string] || data.color as string) : '#D85A30';
 
   return (
     <>
