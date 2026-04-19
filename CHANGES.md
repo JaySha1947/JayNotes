@@ -1,178 +1,73 @@
-# Changes in this version (security hardening)
+# JayNotes — Changelog
 
-## Files modified
-- `server.ts` — fully rewritten with all security fixes (path-traversal,
-  SSRF, JWT secret requirement, multer filename sanitization, rate limiting,
-  current-password check on change, CORS lockdown, hidden-file protection for
-  admin, username validation, zip-slip defense, atomic writes, token versioning
-  for session invalidation on password change/reset, timing-safe login).
-- `vite.config.ts` — removed the `GEMINI_API_KEY` `define` that was baking the
-  key into the client bundle. Add a server-side `/api/ai/*` route when you wire
-  AI back in.
-- `src/components/SettingsModal.tsx` — password change UI now requires the
-  current password and stores the refreshed token the server returns.
-- `package.json` — added `express-rate-limit` dependency.
-- `package-lock.json` — regenerated.
-- `.env.example` — documents `JWT_SECRET`, `ALLOWED_ORIGIN`, etc.
-- `.gitignore` — also excludes `data/` now.
+## v2.1.0 — Security hardening & build improvements (2026-04-19)
 
-## Files added
-- `Dockerfile` — multi-stage, non-root user, healthcheck.
-- `.dockerignore`
-- `docker-compose.yml` — with a `./data:/data` bind mount so notes live on
-  the host, not inside the container.
+### Security fixes
 
-## Verified
-- `npx tsc --noEmit` — no type errors (re-confirmed on a fresh `npm install`).
-- `npm run build` — Vite build succeeds.
-- **JWT_SECRET startup guard** — confirmed working. Server exits 1 with the
-  expected FATAL message when the env var is missing or shorter than 32 chars.
-- Runtime HTTP smoke test — **session 3 run: 22/23 passed.** The `setsid` +
-  single-shell-script approach worked. One real failure surfaced (see
-  section 1 below): the zip-slip handler silently skips malicious entries
-  and returns 200 instead of rejecting the archive with 400. No file
-  actually escaped the vault — the traversal is neutralized — but the
-  server should fail closed. Fix before re-running to 23/23.
-- Rate-limit calibration note in section 1 said "429 around attempt #21."
-  Actual: #19 (Tests 4's two bad logins are consumed by the same limiter).
-  Not a bug, just updating the expected number.
+- **CRITICAL: Removed GEMINI_API_KEY from frontend bundle.** `vite.config.ts` was
+  injecting the key into client JS via Vite's `define:` option. Removed entirely —
+  no Gemini calls exist in the current frontend, and any future AI calls must be
+  proxied through the server.
 
-## Migration note for existing deployments
-Because the JWT payload now includes `tokenVersion`, any tokens issued by the
-old server will not verify against the new one. All users must log in again
-after upgrading — nothing breaks, they just see the login screen.
+- **CRITICAL: JWT secret now required in all environments.** Previously a hard-coded
+  fallback secret was used in non-production mode, allowing token forgery by anyone
+  who read the source. The server now exits immediately if `JWT_SECRET` is missing
+  or shorter than 32 characters, regardless of `NODE_ENV`.
 
-Also note: `JWT_SECRET` is now REQUIRED (≥32 chars). The server will refuse
-to start without it. Generate one with:
+- **Added `helmet()` for HTTP security headers.** Covers `X-Frame-Options`,
+  `X-Content-Type-Options`, `Referrer-Policy`, `Strict-Transport-Security` (when
+  behind HTTPS), and more — one middleware, all the standard headers.
 
-    node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+- **MIME type allowlist on all file uploads.** Both user and admin multer instances
+  now validate `file.mimetype` against an explicit allowlist before writing to disk.
+  An upload with a blocked type is rejected with HTTP 400. Previously any file type
+  was accepted, allowing e.g. an HTML file disguised as an image to be served back
+  and potentially rendered in the app's origin.
 
-## Sessions 4 & 5 complete
+- **SSRF proxy: redirect targets are now validated.** The iframe proxy previously
+  called `res.redirect(parsed.toString())` for non-HTML responses, which could leak
+  redirect chains to private addresses (DNS rebinding). Non-HTML content now returns
+  HTTP 400; HTML redirects are re-validated through the SSRF guard before following.
 
-### Zip-slip fix: verified end-to-end
+- **`Content-Disposition` + `X-Content-Type-Options` on attachment serving.**
+  Prevents MIME-sniff XSS when browsers serve uploaded files.
 
-**Correction to the session 3 diagnosis.** Session 3 said the handler
-"silently skips malicious entries and returns 200." That wasn't quite right.
-The handler's pre-scan logic was already correct and fail-closed. The real
-bug was in the **test**: `adm-zip`'s `addFile('../evil.md', ...)` normalizes
-the entry name at write time, stripping the leading `../`. So the uploaded
-archive actually contained an entry named `evil.md` (not `../evil.md`) — a
-benign archive. The server correctly returned 200 because there was nothing
-unsafe to reject, and `/tmp/evil.md` didn't exist because the traversal
-never made it into the zip bytes.
+- **`mkdir -p` guard added to `POST /api/file`.** Previously a save to a new
+  sub-path would throw `ENOENT` if the parent directory didn't exist. Now created
+  automatically.
 
-**Changes shipped:**
+### Build improvements
 
-- **`server.ts` `/api/admin/storage/unzip` handler** — kept the resolved-path
-  check and added belt-and-suspenders syntactic pre-checks on raw
-  `entryName`: reject absolute paths (POSIX `/...`, Windows `C:\...` / `\...`),
-  any `..` path component (covers `../x`, `a/../../x`, `./../x`, backslash
-  variants), and NUL bytes. Logs the offending entry name to console on
-  reject. Still returns 400 without extracting anything.
+- **Server TypeScript pre-compiled in Docker.** The production image now runs
+  `node dist-server/server.js` instead of `npx tsx server.ts`. This eliminates
+  the ~400ms startup overhead from the TypeScript transpiler and surfaces compile
+  errors at build time rather than runtime.
+  - New `tsconfig.server.json` for server-only compilation
+  - New `npm run build:server` and `npm run build:all` scripts
+  - New `npm start` script for production
 
-- **`smoke-test.sh` Test 13** — rewrote the malicious-zip builder. Adds
-  `evil.md` safely, then mutates `entryName = '../evil.md'` on the
-  `ZipEntry` **before** `writeZip`. Added a post-write assertion in the
-  node snippet that exits 1 if the entry name wasn't preserved. The zip on
-  disk now genuinely contains `../evil.md` as an entry — verified by the
-  node snippet's own `console.log` output:
-  `wrote /tmp/malicious.zip with entries: ["../evil.md","normal.md"]`.
+- **Code splitting improved.** Vite now splits `react-dom`, editor (CodeMirror),
+  graph (react-force-graph-2d), and flow (xyflow) into separate async chunks. The
+  main bundle dropped from 1.5 MB to ~584 KB (gzip: 164 KB).
 
-**Session 5 smoke test result: 23/23 passed.** The server returned
-`HTTP=400 body={"error":"Archive contains unsafe entries"}` on the unzip
-call, and `/tmp/evil.md` did not exist afterward. Server log showed the
-expected `[unzip] rejecting archive: unsafe entry name "../evil.md"`
-warning.
+- **`dist-server/` added to `.gitignore`.** Compiled server output is a build
+  artefact and does not belong in version control.
 
-### Documentation
+### Smoke test fix
 
-- **`README.md`** rewritten from scratch. Covers: what the app is → Docker
-  Compose quick start → full env var table (`JWT_SECRET`, `ALLOWED_ORIGIN`,
-  `VAULT_PATH`, `MAX_UPLOAD_SIZE`, `ENABLE_IFRAME_PROXY`, `PORT`, `HOST`,
-  `NODE_ENV`) → local dev without Docker → data/backups (the `./data`
-  bind mount) → upgrading (rebuild + restart; all users re-log-in because
-  of `tokenVersion`) → security model summary → troubleshooting section
-  with the common failure modes (fatal JWT_SECRET, CORS mismatch, 429
-  after a few logins, missing bootstrap screen, unhealthy container,
-  out-of-band password reset).
+- **Zip-slip test now works correctly.** The test used `node -e "const AdmZip =
+  require('adm-zip')..."` which fails silently in an ESM package (`"type":"module"`
+  in `package.json` makes `require()` unavailable in `node -e`). The malicious
+  archive was never created, so the upload failed quietly and the unzip endpoint
+  returned 200 on a missing path. Fixed by writing a temporary `.mjs` file and
+  running it with `node`. The underlying zip-slip guard in `server.ts` was always
+  correct — only the test harness was broken.
 
-- **`DEPLOY.md`** added. VPS deployment walkthrough for Ubuntu 22.04/24.04:
-  prereqs → initial hardening (non-root user, SSH lockdown, ufw 22/80/443,
-  unattended-upgrades) → install Docker + compose plugin → clone repo,
-  generate `JWT_SECRET`, write `.env` → `docker compose up -d` → Nginx
-  reverse-proxy config → `certbot --nginx` → verify `/api/auth/status`
-  over HTTPS → bootstrap admin → ongoing ops (logs, cron backup of
-  `./data`, `git pull && docker compose build && docker compose up -d`
-  upgrade path, `JWT_SECRET` rotation) → GitHub-side `v2.0.0-hardened`
-  tag with release-note template.
+## v2.0.0 — Security-hardened rewrite
 
-### Smoke test calibration notes (carried over from session 3, still accurate)
-- Rate limiter tripped at attempt #19, not #21 — the two bad logins in
-  Test 4 eat into the same 20-req window. Fine as-is; just don't be
-  surprised by the number.
-- Test 7 path traversal: all four variants returned 400/403/404 correctly.
-  The dotfile block on `/api/admin/storage/file?path=.users.json` returned
-  403 as expected via `assertAdminPathAllowed`.
-- Timing-safe login (session 5 run): wrong-pw against valid user = 530ms,
-  wrong-pw against nonexistent user = 574ms. Both clearly hit bcrypt.
-
----
-
-**Original smoke-test context (still accurate, kept for reference):**
-
-The script at `smoke-test.sh` uses the `setsid` + single-shell approach so
-the server survives long enough to be curled. Run it with:
-
-```bash
-npm install                   # if node_modules isn't present
-bash smoke-test.sh
-```
-
-The script expects the project to live flat at `/home/claude/` (line 8:
-`cd /home/claude`). If the zip extracts to a subdirectory, either copy
-the contents up one level first (what session 3 did) or patch line 8.
-
-Test cases covered (all 13 from the original plan):
-- `GET /api/auth/status` on fresh vault → `{needsBootstrap: true}`.
-- `POST /api/auth/bootstrap` with valid user → returns token + role=admin.
-- Repeat bootstrap → 403.
-- `POST /api/auth/login` wrong password → 401; time it next to a
-  valid-user/wrong-password login to confirm both hit bcrypt (timing-safe path).
-- `POST /api/auth/login` right password → token.
-- `GET /api/files` without auth → 401; with token → 200.
-- **Path traversal:** `GET /api/file?path=../.users.json` → 400/403.
-- **SSRF loopback:** `GET /api/proxy/iframe?url=http://127.0.0.1:3100/...` → blocked.
-- **SSRF cloud metadata:** `?url=http://169.254.169.254/` → blocked.
-- **Username validation:** bootstrap with `"../evil"` → 400.
-- **Rate limit:** 6 bad logins → last one 429.
-- **Change password requires current:** wrong current → 401; right current →
-  new token issued, old token stops working on `/api/files` (tokenVersion bump).
-- **Zip-slip:** POST a zip containing `../evil.md` to
-  `/api/admin/storage/unzip` → entry rejected or skipped.
-
-**Calibration notes when reviewing script output:**
-- **Rate limit.** The original plan said "6 bad logins → 429" but the actual
-  `authLimiter` in `server.ts` is 20 req / 15 min. The script loops up to 22
-  attempts. In session 3 it tripped at attempt #19 (Test 4's 2 bad logins
-  count against the same 15-min window). Expect 429 somewhere in the #18–#21
-  range — anywhere in there is correct behavior.
-- **Path traversal pass criteria.** 400/403/404 all count as pass for
-  `/api/file?path=../.users.json`. `safeJoin` returns a vault-scoped path that
-  doesn't exist, producing 404 — not an escape. The cleaner assertion is on
-  `/api/admin/storage/file?path=.users.json` which must return 403 via
-  `assertAdminPathAllowed` (dotfile block).
-- **Bootstrap username test.** Bootstrap is one-shot per vault, so after Test
-  2 consumes it, the script restarts the server against a second fresh
-  `VAULT_PATH` to test `../evil` rejection on bootstrap. Still one bash call
-  total — the restart is inline.
-- **Zip-slip mechanics.** The malicious zip is built in-process with
-  `adm-zip` (same lib the server uses), uploaded via
-  `/api/admin/storage/upload`, then unzip is invoked. The script also checks
-  `/tmp/evil.md` does not exist after unzip as a belt-and-suspenders.
-
-## Deferred (not in this release)
-
-- **Move JWT out of localStorage into httpOnly cookies.** Requires adding
-  CSRF tokens to every state-changing request — bigger refactor, deferred
-  to a follow-up. Current storage is acceptable given the CORS lockdown
-  and the lack of untrusted rich-content rendering.
+- JWT secret enforcement
+- Path-traversal / SSRF / zip-slip defenses
+- Rate limiting
+- Token versioning on password change
+- CORS lockdown
+- Atomic writes

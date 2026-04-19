@@ -11,7 +11,10 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = React.useState('editor');
   const [theme, setTheme] = React.useState(localStorage.getItem('jays_notes_theme') || 'Dark');
-  const [accentColor, setAccentColor] = React.useState(localStorage.getItem('jays_notes_accent') || '#7d4698');
+  const [accentColor, setAccentColor] = React.useState(() => {
+    const saved = localStorage.getItem('jays_notes_accent');
+    return (saved === '#7d4698' || saved === '#D85A30') ? '#00c882' : (saved || '#00c882');
+  });
   const [homeNote, setHomeNote] = React.useState(localStorage.getItem('jays_notes_home') || 'Welcome.md');
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
@@ -209,7 +212,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   <h3 className="text-text-normal font-medium mb-1">Accent color</h3>
                   <p className="text-sm text-text-muted mb-3">Choose the accent color used throughout the app.</p>
                   <div className="flex flex-wrap gap-3 items-center">
-                    {['#7d4698', '#2563eb', '#059669', '#dc2626', '#d97706', '#4f46e5', '#0891b2', '#be123c', '#4d7c0f', '#475569'].map(color => (
+                    {['#00c882', '#2563eb', '#059669', '#dc2626', '#d97706', '#4f46e5', '#0891b2', '#be123c', '#4d7c0f', '#475569'].map(color => (
                       <button 
                         key={color} 
                         className={`w-6 h-6 rounded-full border ${accentColor === color ? 'border-text-normal ring-2 ring-offset-2 ring-offset-bg-primary ring-interactive-accent' : 'border-border-color'}`}

@@ -154,8 +154,8 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
   const textColor = isLight ? '#2e3338' : '#dcddde';
   const bgColor = isLight ? '#ffffff' : '#1e1e1e';
   const mutedColor = isLight ? '#b9bbbe' : '#555555'; // More visible in dark mode
-  const accentColor = '#7d4698';
-  const hoverAccentColor = '#a855f7';
+  const accentColor = '#00c882';
+  const hoverAccentColor = '#05e093';
 
   return (
     <div ref={containerRef} className="h-full w-full bg-bg-primary relative overflow-hidden">

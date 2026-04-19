@@ -1,8 +1,6 @@
 {
-  "name": "Jay's Notes - AI",
-  "description": "",
+  "name": "Jay's Notes",
+  "description": "A feature-rich, full-stack personal knowledge management system with Markdown support, wikilinks, bi-directional linking, and a local-first vault system.",
   "requestFramePermissions": [],
-  "majorCapabilities": [],
-  "C7": [],
-  "aq": []
+  "majorCapabilities": []
 }

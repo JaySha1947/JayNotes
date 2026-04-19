@@ -410,8 +410,17 @@ echo "==============================================="
 # on disk, so the archive isn't actually malicious. We work around this by
 # adding the entry with a safe name, then mutating entryName AFTER addFile
 # but BEFORE writeZip. The resulting zip has a real '../evil.md' entry.
-node -e "
-const AdmZip = require('adm-zip');
+# Use a temp ESM script (package.json has "type":"module" so require() is unavailable)
+cat > /tmp/make-malicious-zip.mjs << 'MJSEOF'
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import path from 'path';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Resolve adm-zip relative to the project so we use the installed version
+const require = createRequire(import.meta.url);
+// Find adm-zip in the project node_modules
+const admZipPath = path.resolve(process.cwd(), 'node_modules/adm-zip/adm-zip.js');
+const { default: AdmZip } = await import(admZipPath);
 const zip = new AdmZip();
 zip.addFile('normal.md', Buffer.from('hello'));
 zip.addFile('evil.md', Buffer.from('PWNED'));
@@ -419,7 +428,6 @@ for (const e of zip.getEntries()) {
   if (e.entryName === 'evil.md') e.entryName = '../evil.md';
 }
 zip.writeZip('/tmp/malicious.zip');
-// Verify the on-disk archive really has the traversal entry
 const verify = new AdmZip('/tmp/malicious.zip');
 const names = verify.getEntries().map(x => x.entryName);
 console.log('wrote /tmp/malicious.zip with entries:', JSON.stringify(names));
@@ -427,7 +435,8 @@ if (!names.includes('../evil.md')) {
   console.error('ERROR: archive does not contain ../evil.md entry');
   process.exit(1);
 }
-"
+MJSEOF
+node /tmp/make-malicious-zip.mjs
 
 # Upload to admin storage root
 curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
