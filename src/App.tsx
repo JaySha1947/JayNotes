@@ -1219,7 +1219,6 @@ export default function App() {
                           );
                         }
                       }}
-                      onSplitRight={() => handleToggleSplit(activeTab.id)}
                       templates={templates}
                     />
                   </Panel>
