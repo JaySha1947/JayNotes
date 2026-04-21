@@ -63,7 +63,7 @@ export function unsubscribeWikilinkSuggestions() { _cb = null; }
 function notifySug(s: WikilinkSuggestion) { _sug = s; _cb?.(s); }
 
 // Minimum characters typed after `[[` before the dropdown appears
-const MIN_AUTOCOMPLETE_CHARS = 2;
+const MIN_AUTOCOMPLETE_CHARS = 0;
 
 export const wikilinkPlugin = $prose(() => {
   const key = new PluginKey('jn-wikilinks');

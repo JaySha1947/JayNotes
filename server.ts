@@ -983,7 +983,10 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
   if (!targetFullPath) return res.status(403).json({ error: 'Access denied' });
 
   try {
-    const flatFiles: any[] = [];
+    // Build a flat file list AND a name→relPath index (same approach as /api/graph)
+    const flatFiles: { path: string; name: string }[] = [];
+    const fileNameToPath = new Map<string, string>(); // baseName (no ext) → relPath
+
     function scanDir(dir: string, relativePath = '') {
       const files = fs.readdirSync(dir);
       for (const file of files) {
@@ -991,28 +994,52 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
         const fullPath = path.join(dir, file);
         const relPath = path.join(relativePath, file);
         const stat = fs.statSync(fullPath);
-        if (stat.isDirectory()) scanDir(fullPath, relPath);
-        else if (file.endsWith('.md')) flatFiles.push({ path: relPath, name: file.replace('.md', '') });
+        if (stat.isDirectory()) { scanDir(fullPath, relPath); continue; }
+        if (!file.endsWith('.md')) continue;
+        const name = file.replace('.md', '');
+        flatFiles.push({ path: relPath, name });
+        // Last-write wins for duplicate names — same behaviour as graph
+        fileNameToPath.set(name, relPath);
       }
     }
     scanDir(vaultPath);
 
-    const backlinks: string[] = [];
-    let forwardlinks: string[] = [];
+    // ── Outgoing links (forwardlinks) ─────────────────────────────────────────
+    // Parse [[wikilinks]] from the current file and resolve each to a file path.
+    // Returns { path: relPath, name: displayName } objects so the UI can navigate
+    // AND display a friendly name regardless of folder depth.
+    const forwardlinks: { path: string; name: string }[] = [];
+    const seenForward = new Set<string>();
 
     if (fs.existsSync(targetFullPath)) {
       const content = fs.readFileSync(targetFullPath, 'utf-8');
-      const matches = content.match(/\[\[(.*?)\]\]/g);
-      if (matches) forwardlinks = matches.map((m) => m.slice(2, -2).split('|')[0]);
+      const WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
+      let m;
+      while ((m = WIKILINK_RE.exec(content)) !== null) {
+        // Strip alias (|) and anchor (#) — e.g. [[Note B#section|alias]] → "Note B"
+        const rawTarget = m[1].split('|')[0].split('#')[0].trim();
+        if (!rawTarget || seenForward.has(rawTarget)) continue;
+        seenForward.add(rawTarget);
+        const resolvedPath = fileNameToPath.get(rawTarget);
+        if (resolvedPath && resolvedPath !== targetPath) {
+          forwardlinks.push({ path: resolvedPath, name: rawTarget });
+        }
+      }
     }
 
+    // ── Backlinks ─────────────────────────────────────────────────────────────
+    // Find every other note that contains a [[wikilink]] pointing at this file.
     const targetName = path.basename(targetPath, '.md');
+    const backlinks: { path: string; name: string }[] = [];
+
     for (const file of flatFiles) {
       if (file.path === targetPath) continue;
       const fullPath = path.join(vaultPath, file.path);
       const content = fs.readFileSync(fullPath, 'utf-8');
-      if (content.includes(`[[${targetName}]]`) || content.includes(`[[${targetName}|`)) {
-        backlinks.push(file.path);
+      // Match [[TargetName]], [[TargetName|alias]], [[TargetName#anchor]], etc.
+      const backlinkRE = new RegExp(`\\[\\[${targetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[|#\\]])`);
+      if (backlinkRE.test(content)) {
+        backlinks.push({ path: file.path, name: file.name });
       }
     }
 

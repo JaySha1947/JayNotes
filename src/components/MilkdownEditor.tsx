@@ -220,8 +220,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  // File list for wikilink autocomplete
-  useEffect(() => {
+  // File list for wikilink autocomplete — refreshed on mount and whenever files change
+  const refreshFileList = useCallback(() => {
     apiFetch('/api/files').then(r => r.json()).then(data => {
       const flat: string[] = [];
       const walk = (nodes: any[]) => {
@@ -234,6 +234,12 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       setWikilinkFileList(flat);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshFileList();
+    window.addEventListener('file-saved', refreshFileList);
+    return () => window.removeEventListener('file-saved', refreshFileList);
+  }, [refreshFileList]);
 
   // Wikilink suggestions
   useEffect(() => {

@@ -39,7 +39,7 @@ export default function App() {
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [history, setHistory] = useState<string[]>(['Welcome.md']);
   const [historyIndex, setHistoryIndex] = useState(0);
-  const [links, setLinks] = useState<{ backlinks: string[], forwardlinks: string[] }>({ backlinks: [], forwardlinks: [] });
+  const [links, setLinks] = useState<{ backlinks: { path: string; name: string }[], forwardlinks: { path: string; name: string }[] }>({ backlinks: [], forwardlinks: [] });
   const [bookmarks, setBookmarks] = useState<string[]>(() => {
     const saved = localStorage.getItem('jays_notes_bookmarks');
     return saved ? JSON.parse(saved) : [];
@@ -1293,18 +1293,21 @@ export default function App() {
                 {rightSidebarTab === 'links' && (
                   <>
                     <div>
-                      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">Backlinks</h4>
+                      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                        Backlinks {links.backlinks.length > 0 && <span className="text-interactive-accent">({links.backlinks.length})</span>}
+                      </h4>
                       {links.backlinks.length === 0 ? (
                         <p className="text-sm text-text-muted">No backlinks found.</p>
                       ) : (
                         <ul className="space-y-1">
                           {links.backlinks.map((link, i) => (
                             <li key={i}>
-                              <button 
+                              <button
                                 className="text-sm text-interactive-accent hover:underline text-left w-full truncate"
-                                onClick={() => handleSelectFile(link)}
+                                onClick={() => handleSelectFile(link.path)}
+                                title={link.path}
                               >
-                                {link.split('/').pop()?.replace('.md', '')}
+                                {link.name}
                               </button>
                             </li>
                           ))}
@@ -1312,18 +1315,21 @@ export default function App() {
                       )}
                     </div>
                     <div>
-                      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">Outgoing Links</h4>
+                      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                        Outgoing Links {links.forwardlinks.length > 0 && <span className="text-interactive-accent">({links.forwardlinks.length})</span>}
+                      </h4>
                       {links.forwardlinks.length === 0 ? (
                         <p className="text-sm text-text-muted">No outgoing links found.</p>
                       ) : (
                         <ul className="space-y-1">
                           {links.forwardlinks.map((link, i) => (
                             <li key={i}>
-                              <button 
+                              <button
                                 className="text-sm text-interactive-accent hover:underline text-left w-full truncate"
-                                onClick={() => handleSelectFile(`${link}.md`)}
+                                onClick={() => handleSelectFile(link.path)}
+                                title={link.path}
                               >
-                                {link}
+                                {link.name}
                               </button>
                             </li>
                           ))}
