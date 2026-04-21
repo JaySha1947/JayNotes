@@ -100,6 +100,30 @@ function sanitizeFilename(name: string): string {
   return cleaned || 'unnamed';
 }
 
+/**
+ * Extract all [[wikilink]] targets from markdown content.
+ * Handles BOTH the current unescaped format ([[...]]) AND the legacy
+ * remark-stringify-escaped format (\[\[...\]\]) that old saves produced,
+ * so existing notes continue to work after the serializer fix.
+ * Returns de-aliased, de-anchored target names, e.g. "Note B".
+ */
+function extractWikilinks(content: string): string[] {
+  const results: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const t = raw.split('|')[0].split('#')[0].trim();
+    if (t && !seen.has(t)) { seen.add(t); results.push(t); }
+  };
+  // Unescaped: [[target]] or [[target|alias]] or [[target#anchor]]
+  const reUnescaped = /\[\[([^\]\n]+)\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = reUnescaped.exec(content)) !== null) add(m[1]);
+  // Escaped by old remark-stringify: \[\[target\]\] or \[\[target]]
+  const reEscaped = /\\\[\\\[([^\]\n]+?)(?:\\\]\\]|\]\])/g;
+  while ((m = reEscaped.exec(content)) !== null) add(m[1]);
+  return results;
+}
+
 /** Identify private/loopback/link-local addresses to prevent SSRF. */
 function isPrivateAddress(ip: string): boolean {
   if (!net.isIP(ip)) return true;
@@ -1005,21 +1029,11 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
     scanDir(vaultPath);
 
     // ── Outgoing links (forwardlinks) ─────────────────────────────────────────
-    // Parse [[wikilinks]] from the current file and resolve each to a file path.
-    // Returns { path: relPath, name: displayName } objects so the UI can navigate
-    // AND display a friendly name regardless of folder depth.
     const forwardlinks: { path: string; name: string }[] = [];
-    const seenForward = new Set<string>();
 
     if (fs.existsSync(targetFullPath)) {
       const content = fs.readFileSync(targetFullPath, 'utf-8');
-      const WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
-      let m;
-      while ((m = WIKILINK_RE.exec(content)) !== null) {
-        // Strip alias (|) and anchor (#) — e.g. [[Note B#section|alias]] → "Note B"
-        const rawTarget = m[1].split('|')[0].split('#')[0].trim();
-        if (!rawTarget || seenForward.has(rawTarget)) continue;
-        seenForward.add(rawTarget);
+      for (const rawTarget of extractWikilinks(content)) {
         const resolvedPath = fileNameToPath.get(rawTarget);
         if (resolvedPath && resolvedPath !== targetPath) {
           forwardlinks.push({ path: resolvedPath, name: rawTarget });
@@ -1028,7 +1042,6 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
     }
 
     // ── Backlinks ─────────────────────────────────────────────────────────────
-    // Find every other note that contains a [[wikilink]] pointing at this file.
     const targetName = path.basename(targetPath, '.md');
     const backlinks: { path: string; name: string }[] = [];
 
@@ -1036,9 +1049,8 @@ app.get('/api/links', authHeaderOnly, (req: any, res) => {
       if (file.path === targetPath) continue;
       const fullPath = path.join(vaultPath, file.path);
       const content = fs.readFileSync(fullPath, 'utf-8');
-      // Match [[TargetName]], [[TargetName|alias]], [[TargetName#anchor]], etc.
-      const backlinkRE = new RegExp(`\\[\\[${targetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[|#\\]])`);
-      if (backlinkRE.test(content)) {
+      // extractWikilinks handles both escaped and unescaped formats
+      if (extractWikilinks(content).includes(targetName)) {
         backlinks.push({ path: file.path, name: file.name });
       }
     }
@@ -1209,10 +1221,7 @@ app.get('/api/graph', authHeaderOnly, (req: any, res) => {
         if (!nodeSet.has(id)) { nodes.push({ id, name }); nodeSet.add(id); }
 
         const content = fs.readFileSync(fullPath, 'utf-8');
-        const wikiLinkRegex = /\[\[(.*?)\]\]/g;
-        let match;
-        while ((match = wikiLinkRegex.exec(content)) !== null) {
-          const targetName = match[1].split('|')[0].split('#')[0];
+        for (const targetName of extractWikilinks(content)) {
           const targetRelPath = fileNameToPath.get(targetName);
           if (targetRelPath && (!filterFolder || targetRelPath.startsWith(filterFolder))) {
             links.push({ source: id, target: targetRelPath });
