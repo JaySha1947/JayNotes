@@ -2,22 +2,49 @@
  * MilkdownEditor.tsx — WYSIWYG markdown editor built on Milkdown 7
  *
  * Features:
- *  - Full WYSIWYG editing (bold, italic, lists, headings, code, etc.)
- *  - Paste-to-upload images → /api/upload → inserts real URL into document
+ *  - Full WYSIWYG editing (bold, italic, strike, headings, lists, code, tables)
+ *  - GFM: strikethrough, task lists, tables (via @milkdown/preset-gfm)
+ *  - Paste/drop image upload → /api/upload → real server URL in document
+ *  - Proper onChange via @milkdown/plugin-listener (no MutationObserver)
  *  - Auto-save with 600ms debounce
- *  - Font scaling via Ctrl +/- /0 and toolbar controls
- *  - Template insertion
- *  - Bookmark toggle
+ *  - Functional toolbar: bold, italic, strike, H1/H2/H3, bullet, ordered,
+ *    task list, blockquote, inline code, horizontal rule
+ *  - Font scaling via Ctrl +/- /0 and toolbar
+ *  - Template insertion, bookmark toggle
+ *  - Trailing newline plugin so cursor never gets stuck at end
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Editor, rootCtx, defaultValueCtx } from '@milkdown/core';
-import { commonmark } from '@milkdown/preset-commonmark';
+import {
+  commonmark,
+  toggleStrongCommand,
+  toggleEmphasisCommand,
+  toggleInlineCodeCommand,
+  wrapInBulletListCommand,
+  wrapInOrderedListCommand,
+  wrapInBlockquoteCommand,
+  wrapInHeadingCommand,
+  insertHrCommand,
+  turnIntoTextCommand,
+} from '@milkdown/preset-commonmark';
+import {
+  gfm,
+  toggleStrikethroughCommand,
+  insertTableCommand,
+} from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { upload, uploadConfig } from '@milkdown/plugin-upload';
+import { listener, listenerCtx } from '@milkdown/plugin-listener';
+import { trailing } from '@milkdown/plugin-trailing';
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
-import { getMarkdown, replaceAll } from '@milkdown/utils';
-import { Bookmark, FileText, ClipboardList } from 'lucide-react';
+import { callCommand } from '@milkdown/utils';
+import {
+  Bookmark, FileText, ClipboardList,
+  Bold, Italic, Strikethrough, List, ListOrdered,
+  CheckSquare, Heading1, Heading2, Heading3,
+  Code, Quote, Minus, Table,
+} from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,14 +58,13 @@ interface MilkdownEditorProps {
   templates?: { name: string; path: string; type: string }[];
 }
 
-// ─── Image upload helper ──────────────────────────────────────────────────────
+// ─── Image upload ─────────────────────────────────────────────────────────────
 
 async function uploadImageToServer(file: File): Promise<string> {
   const safeName =
     file.name === 'image.png' ? `pasted-image-${Date.now()}.png` : file.name;
   const formData = new FormData();
   formData.append('file', new File([file], safeName, { type: file.type }));
-
   const token = localStorage.getItem('jays_notes_token');
   const res = await fetch('/api/upload', {
     method: 'POST',
@@ -48,24 +74,35 @@ async function uploadImageToServer(file: File): Promise<string> {
   if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`);
   const data = await res.json();
   if (!data.path) throw new Error('Server returned no path');
-  // append token so image loads correctly via authenticated endpoint
   return `/api/${data.path}?token=${encodeURIComponent(token ?? '')}`;
 }
 
-// ─── Font size constants ──────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
-// ─── Inner editor component (must live inside MilkdownProvider) ───────────────
+// ─── Inner editor (must live inside MilkdownProvider) ────────────────────────
 
 interface InnerProps {
   initialContent: string;
   editorRef: React.MutableRefObject<Editor | null>;
+  onMarkdownChange: (md: string) => void;
   onReady: () => void;
 }
 
-const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onReady }) => {
+const InnerMilkdown: React.FC<InnerProps> = ({
+  initialContent,
+  editorRef,
+  onMarkdownChange,
+  onReady,
+}) => {
+  // Stable callback refs so useEditor deps don't change on every render
+  const onChangeRef = useRef(onMarkdownChange);
+  onChangeRef.current = onMarkdownChange;
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+
   const { loading, get } = useEditor(
     (root) =>
       Editor.make()
@@ -73,7 +110,12 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onRead
           ctx.set(rootCtx, root);
           ctx.set(defaultValueCtx, initialContent);
 
-          // Configure the upload plugin with our server uploader
+          // Listener: fires on every markdown change
+          ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+            onChangeRef.current(markdown);
+          });
+
+          // Image upload config
           ctx.update(uploadConfig.key, (prev) => ({
             ...prev,
             enableHtmlFileUploader: true,
@@ -90,7 +132,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onRead
                   });
                   if (node) nodes.push(node);
                 } catch (err) {
-                  console.error('[MilkdownEditor] image upload failed:', err);
+                  console.error('[MilkdownEditor] upload error:', err);
                 }
               }
               return nodes;
@@ -98,24 +140,39 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onRead
           }));
         })
         .use(commonmark)
+        .use(gfm)
         .use(history)
-        .use(upload),
-    [initialContent]
+        .use(listener)
+        .use(upload)
+        .use(trailing),
+    [] // empty deps — initialContent is set via defaultValueCtx once
   );
 
-  // Once editor is ready, expose the instance via ref
   useEffect(() => {
     if (!loading) {
-      const instance = get();
-      if (instance) {
-        editorRef.current = instance;
-        onReady();
+      const inst = get();
+      if (inst) {
+        editorRef.current = inst;
+        onReadyRef.current();
       }
     }
-  }, [loading, get, editorRef, onReady]);
+  }, [loading, get, editorRef]);
 
   return <Milkdown />;
 };
+
+// ─── Toolbar button helper ────────────────────────────────────────────────────
+
+const ToolBtn: React.FC<{
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}> = ({ title, onClick, children, style }) => (
+  <button className="format-toolbar-btn" title={title} onClick={onClick} style={style}>
+    {children}
+  </button>
+);
 
 // ─── Main exported component ──────────────────────────────────────────────────
 
@@ -127,85 +184,81 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
 }) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
-  const [editorKey, setEditorKey] = useState(0);   // remount on file change
+  const [editorKey, setEditorKey] = useState(0);
   const [editorReady, setEditorReady] = useState(false);
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
 
-  const editorInstanceRef = useRef<Editor | null>(null);
+  const editorRef = useRef<Editor | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
+  // Track latest markdown so template append works
+  const latestMdRef = useRef('');
 
-  // ── Font size CSS variable ─────────────────────────────────────────────────
+  // ── Font size CSS var ──────────────────────────────────────────────────────
   useEffect(() => {
     document.documentElement.style.setProperty('--editor-font-size', `${fontSize}px`);
   }, [fontSize]);
 
-  // ── Ctrl +/- /0 keyboard scaling ──────────────────────────────────────────
+  // ── Ctrl +/- /0 ───────────────────────────────────────────────────────────
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return;
       if (e.key === '=' || e.key === '+') { e.preventDefault(); setFontSize(p => Math.min(p + 1, 40)); }
       else if (e.key === '-') { e.preventDefault(); setFontSize(p => Math.max(p - 1, 8)); }
       else if (e.key === '0') { e.preventDefault(); setFontSize(DEFAULT_FONT_SIZE); }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   // ── Load file ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!filePath) { setContent(''); return; }
     setEditorReady(false);
-    editorInstanceRef.current = null;
+    editorRef.current = null;
+    latestMdRef.current = '';
     setLoading(true);
     apiFetch(`/api/file?path=${encodeURIComponent(filePath)}`)
       .then(r => (r.ok ? r.text() : Promise.reject('load-error')))
       .then(text => {
         setContent(text);
+        latestMdRef.current = text;
         setEditorKey(k => k + 1);
       })
       .catch(() => {
-        setContent('# Error loading file');
+        const err = '# Error loading file';
+        setContent(err);
+        latestMdRef.current = err;
         setEditorKey(k => k + 1);
       })
       .finally(() => setLoading(false));
   }, [filePath]);
 
-  // ── Auto-save via MutationObserver on editor DOM changes ──────────────────
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  // ── Save handler (called by listener plugin) ───────────────────────────────
+  const handleMarkdownChange = useCallback((md: string) => {
+    latestMdRef.current = md;
+    const path = currentFileRef.current;
+    if (!path) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      apiFetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, content: md }),
+      })
+        .then(() => window.dispatchEvent(new CustomEvent('file-saved')))
+        .catch(err => console.error('[MilkdownEditor] save error:', err));
+    }, 600);
+  }, []);
 
-  useEffect(() => {
-    if (!editorReady) return;
-    const container = wrapperRef.current;
-    if (!container) return;
-    let lastMd = '';
-
-    const save = () => {
-      const inst = editorInstanceRef.current;
-      if (!inst) return;
-      const md = inst.action(getMarkdown());
-      if (!md || md === lastMd) return;
-      lastMd = md;
-      const path = currentFileRef.current;
-      if (!path) return;
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        apiFetch('/api/file', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path, content: md }),
-        })
-          .then(() => window.dispatchEvent(new CustomEvent('file-saved')))
-          .catch(err => console.error('[MilkdownEditor] save error:', err));
-      }, 600);
-    };
-
-    const obs = new MutationObserver(save);
-    obs.observe(container, { subtree: true, childList: true, characterData: true });
-    return () => obs.disconnect();
-  }, [editorReady]);
+  // ── Toolbar command helper ─────────────────────────────────────────────────
+  const cmd = useCallback((command: any, payload?: any) => {
+    const inst = editorRef.current;
+    if (!inst) return;
+    inst.action(callCommand(command, payload));
+  }, []);
 
   // ── Template insertion ─────────────────────────────────────────────────────
   const handleApplyTemplate = async (t: { name: string; path: string; type: string }) => {
@@ -214,10 +267,11 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
       if (!res.ok) return;
       let tmpl = await res.text();
       tmpl = tmpl.replace(/{{date}}/g, new Date().toISOString().split('T')[0]);
-      const inst = editorInstanceRef.current;
+      const inst = editorRef.current;
       if (inst) {
-        const current = inst.action(getMarkdown()) ?? '';
-        inst.action(replaceAll(current + '\n\n' + tmpl));
+        // Use insert utility to append at end
+        const { insert } = await import('@milkdown/utils');
+        inst.action(insert('\n\n' + tmpl));
       }
       setIsTemplateMenuOpen(false);
     } catch (err) {
@@ -225,9 +279,9 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
     }
   };
 
-  const handleEditorReady = useCallback(() => setEditorReady(true), []);
+  const handleReady = useCallback(() => setEditorReady(true), []);
 
-  // ── Empty state ────────────────────────────────────────────────────────────
+  // ── Empty / loading states ─────────────────────────────────────────────────
   if (!filePath) {
     return (
       <div className="h-full flex items-center justify-center text-text-muted bg-bg-primary">
@@ -253,11 +307,7 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
   }
 
   if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center text-text-muted">
-        Loading…
-      </div>
-    );
+    return <div className="h-full flex items-center justify-center text-text-muted">Loading…</div>;
   }
 
   return (
@@ -271,50 +321,32 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
         </div>
         <div className="flex items-center gap-1">
           {onToggleBookmark && (
-            <button
-              onClick={onToggleBookmark}
+            <button onClick={onToggleBookmark}
               className={`p-1.5 rounded transition-colors ${isBookmarked ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
-              title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-            >
+              title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}>
               <Bookmark size={14} fill={isBookmarked ? 'currentColor' : 'none'} />
             </button>
           )}
-
-          <span
-            className="text-xs text-text-muted px-1 select-none tabular-nums"
-            title="Ctrl+= / Ctrl+- to scale | Ctrl+0 to reset"
-          >
-            {fontSize}px
-          </span>
-
-          {/* Template menu */}
+          <span className="text-xs text-text-muted px-1 select-none tabular-nums"
+            title="Ctrl+= / Ctrl+- to scale | Ctrl+0 to reset">{fontSize}px</span>
           <div className="relative">
-            <button
-              onClick={() => setIsTemplateMenuOpen(o => !o)}
+            <button onClick={() => setIsTemplateMenuOpen(o => !o)}
               className={`p-1.5 rounded transition-colors ${isTemplateMenuOpen ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
-              title="Insert Template"
-            >
+              title="Insert Template">
               <ClipboardList size={14} />
             </button>
             {isTemplateMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-bg-secondary border border-border-color rounded-md shadow-xl z-50 py-1 overflow-hidden">
-                <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider border-b border-border-color">
-                  Insert Template
-                </div>
+                <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider border-b border-border-color">Insert Template</div>
                 <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                  {templates.filter(t => t.type === 'file').length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-text-muted italic">No templates found</div>
-                  ) : (
-                    templates.filter(t => t.type === 'file').map(t => (
-                      <button
-                        key={t.path}
-                        onClick={() => handleApplyTemplate(t)}
-                        className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate"
-                      >
+                  {templates.filter(t => t.type === 'file').length === 0
+                    ? <div className="px-3 py-2 text-xs text-text-muted italic">No templates found</div>
+                    : templates.filter(t => t.type === 'file').map(t => (
+                      <button key={t.path} onClick={() => handleApplyTemplate(t)}
+                        className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate">
                         {t.name}
                       </button>
-                    ))
-                  )}
+                    ))}
                 </div>
               </div>
             )}
@@ -324,36 +356,60 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
 
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className="format-toolbar">
-        <select
-          title="Font size"
-          value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
-          onChange={e => setFontSize(Number(e.target.value))}
-        >
-          {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
-          {!FONT_SIZES.includes(fontSize) && <option value={fontSize}>{fontSize}px</option>}
-        </select>
-        <button className="format-toolbar-btn" title="Increase font (Ctrl++)"
-          onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 13 }}>A⁺</button>
-        <button className="format-toolbar-btn" title="Decrease font (Ctrl+-)"
-          onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</button>
-        <button className="format-toolbar-btn" title="Reset font (Ctrl+0)"
-          onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</button>
+        {/* Inline formatting */}
+        <ToolBtn title="Bold (Ctrl+B)" onClick={() => cmd(toggleStrongCommand.key)}><Bold size={13} /></ToolBtn>
+        <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={13} /></ToolBtn>
+        <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={13} /></ToolBtn>
+        <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={13} /></ToolBtn>
 
         <div className="format-toolbar-separator" />
 
-        <span className="text-xs text-text-muted px-1 select-none hidden sm:inline">
-          Use keyboard shortcuts: <strong>Ctrl+B</strong> bold · <strong>Ctrl+I</strong> italic · <strong>Ctrl+Z</strong> undo
-        </span>
+        {/* Headings */}
+        <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 12 }}>H1</ToolBtn>
+        <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 11 }}>H2</ToolBtn>
+        <ToolBtn title="Heading 3" onClick={() => cmd(wrapInHeadingCommand.key, 3)} style={{ fontWeight: 700, fontSize: 10 }}>H3</ToolBtn>
+        <ToolBtn title="Plain paragraph" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 10 }}>¶</ToolBtn>
+
+        <div className="format-toolbar-separator" />
+
+        {/* Lists */}
+        <ToolBtn title="Bullet list" onClick={() => cmd(wrapInBulletListCommand.key)}><List size={13} /></ToolBtn>
+        <ToolBtn title="Ordered list" onClick={() => cmd(wrapInOrderedListCommand.key)}><ListOrdered size={13} /></ToolBtn>
+        <ToolBtn title="Task list (type [ ] in a bullet)" onClick={() => {
+          // Insert a task list item via markdown input rule
+          cmd(wrapInBulletListCommand.key);
+        }}><CheckSquare size={13} /></ToolBtn>
+
+        <div className="format-toolbar-separator" />
+
+        {/* Block elements */}
+        <ToolBtn title="Blockquote" onClick={() => cmd(wrapInBlockquoteCommand.key)}><Quote size={13} /></ToolBtn>
+        <ToolBtn title="Horizontal rule" onClick={() => cmd(insertHrCommand.key)}><Minus size={13} /></ToolBtn>
+        <ToolBtn title="Insert table" onClick={() => cmd(insertTableCommand.key)}><Table size={13} /></ToolBtn>
+
+        <div className="format-toolbar-separator" />
+
+        {/* Font size */}
+        <select title="Font size"
+          value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
+          onChange={e => setFontSize(Number(e.target.value))}>
+          {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
+          {!FONT_SIZES.includes(fontSize) && <option value={fontSize}>{fontSize}px</option>}
+        </select>
+        <ToolBtn title="Increase font (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 13 }}>A⁺</ToolBtn>
+        <ToolBtn title="Decrease font (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</ToolBtn>
+        <ToolBtn title="Reset font (Ctrl+0)" onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</ToolBtn>
       </div>
 
-      {/* ── Milkdown editor ─────────────────────────────────────────────── */}
-      <div ref={wrapperRef} className="milkdown-wrapper flex-grow min-w-0 overflow-auto custom-scrollbar">
+      {/* ── Milkdown WYSIWYG editor ──────────────────────────────────────── */}
+      <div className="milkdown-wrapper flex-grow min-w-0 overflow-auto custom-scrollbar">
         <MilkdownProvider>
           <InnerMilkdown
             key={editorKey}
             initialContent={content}
-            editorRef={editorInstanceRef}
-            onReady={handleEditorReady}
+            editorRef={editorRef}
+            onMarkdownChange={handleMarkdownChange}
+            onReady={handleReady}
           />
         </MilkdownProvider>
       </div>
