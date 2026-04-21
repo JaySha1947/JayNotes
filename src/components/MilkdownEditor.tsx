@@ -196,6 +196,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   currentFileRef.current = filePath;
   const sugRef = useRef(suggestions);
   sugRef.current = suggestions;
+  const noopReady = useCallback(() => {}, []);
 
   // Font size
   useEffect(() => {
@@ -479,7 +480,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               initialContent={content}
               editorRef={editorRef}
               onMarkdownChange={handleMarkdownChange}
-              onReady={useCallback(() => {}, [])}
+              onReady={noopReady}
             />
           </MilkdownProvider>
         </div>
