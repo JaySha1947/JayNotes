@@ -18,6 +18,7 @@ import {
   addRowAfterCommand, addRowBeforeCommand,
   deleteSelectedCellsCommand,
   setAlignCommand,
+  columnResizingPlugin,
 } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { upload, uploadConfig } from '@milkdown/plugin-upload';
@@ -141,6 +142,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(listener)
       .use(upload)
       .use(trailing)
+      .use(columnResizingPlugin)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin),
     []

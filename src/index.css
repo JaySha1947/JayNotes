@@ -759,3 +759,22 @@ body {
 .milkdown-wrapper .editor.resize-cursor {
   cursor: col-resize !important;
 }
+
+/* ── Override prosemirror-tables default styles for dark theme ─────────────── */
+.ProseMirror .column-resize-handle {
+  background-color: var(--interactive-accent) !important;
+  opacity: 0.7 !important;
+  width: 3px !important;
+}
+.ProseMirror .selectedCell::after {
+  background: rgba(0, 200, 130, 0.18) !important;
+}
+.ProseMirror.resize-cursor {
+  cursor: col-resize !important;
+}
+/* Ensure table cells have position:relative for the overlay to work */
+.milkdown-wrapper .editor td,
+.milkdown-wrapper .editor th {
+  position: relative !important;
+  min-width: 40px !important;
+}

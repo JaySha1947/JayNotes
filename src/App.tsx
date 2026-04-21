@@ -253,8 +253,6 @@ export default function App() {
 
     const handleFileSaved = () => {
       fetchTags();
-      // Also bump refreshTrigger so links/backlinks panel re-fetches
-      setRefreshTrigger(prev => prev + 1);
     };
 
     window.addEventListener('file-saved', handleFileSaved);
@@ -322,6 +320,24 @@ export default function App() {
     };
     fetchLinks();
   }, [activeTabId, activeTab, refreshTrigger]);
+
+  // Separate stable listener: re-fetch links whenever any file is saved
+  // Uses refs to avoid stale closure — always reads current activeTab
+  const activeTabRef = React.useRef(activeTab);
+  activeTabRef.current = activeTab;
+  useEffect(() => {
+    const onSaved = () => {
+      const tab = activeTabRef.current;
+      if (tab?.type === 'editor' && tab.path) {
+        apiFetch(`/api/links?path=${encodeURIComponent(tab.path)}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => { if (data) setLinks(data); })
+          .catch(() => {});
+      }
+    };
+    window.addEventListener('file-saved', onSaved);
+    return () => window.removeEventListener('file-saved', onSaved);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
