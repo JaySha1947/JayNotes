@@ -731,6 +731,13 @@ html.light .jn-wikilink-dropdown {
   margin-top: 3px !important;
   background: transparent !important;
   flex-shrink: 0 !important;
+  cursor: pointer !important;
+  transition: border-color 0.15s, background 0.15s !important;
+}
+
+/* Hover hint on the checkbox area */
+.milkdown-wrapper .editor li[data-item-type="task"]:hover::before {
+  border-color: var(--interactive-accent) !important;
 }
 
 /* Checked state — show a checkmark */

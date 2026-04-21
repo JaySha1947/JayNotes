@@ -248,33 +248,78 @@ export function execLiftBlockquote(view: any): boolean {
   return false;
 }
 
-// ─── Checklist: convert current/selected lines to GFM task list items ─────────
+// ─── Task-list helpers ────────────────────────────────────────────────────────
 
+/** Return the list_item ancestor of `pos` if it is a GFM task item (checked != null). */
+function getTaskItemAt(state: any, pos: number): { node: any; nodePos: number } | null {
+  const $pos = state.doc.resolve(pos);
+  for (let d = $pos.depth; d > 0; d--) {
+    const node = $pos.node(d);
+    if (node.type.name === 'list_item' && node.attrs.checked != null) {
+      return { node, nodePos: $pos.before(d) };
+    }
+  }
+  return null;
+}
+
+/** Toggle a task-item's checked attribute via a ProseMirror transaction. */
+export function toggleTaskItemChecked(view: any, itemPos: number): boolean {
+  const { state, dispatch } = view;
+  const node = state.doc.nodeAt(itemPos);
+  if (!node || node.type.name !== 'list_item' || node.attrs.checked == null) return false;
+  const tr = state.tr.setNodeMarkup(itemPos, undefined, {
+    ...node.attrs,
+    checked: !node.attrs.checked,
+  });
+  dispatch(tr);
+  return true;
+}
+
+/**
+ * Insert GFM task-list items for the current selection.
+ * If the cursor is already inside a task-list item, convert it back to a
+ * plain paragraph inside a regular bullet list (toggle-off behaviour).
+ */
 export function execInsertChecklist(view: any): boolean {
   const { state, dispatch } = view;
   const { from, to } = state.selection;
   const schema = state.schema;
 
   const bulletListType = schema.nodes.bullet_list;
-  const listItemType = schema.nodes.list_item;
-  const paragraphType = schema.nodes.paragraph;
-
+  const listItemType   = schema.nodes.list_item;
+  const paragraphType  = schema.nodes.paragraph;
   if (!bulletListType || !listItemType || !paragraphType) return false;
 
-  const blocks: { from: number; to: number; text: string }[] = [];
+  // ── Toggle-off: if cursor is already in a task item, un-task it ──────────
+  const taskItem = getTaskItemAt(state, from);
+  if (taskItem) {
+    let tr = state.tr;
+    let changed = false;
+    state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+      if (node.type === listItemType && node.attrs.checked != null) {
+        tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: null });
+        changed = true;
+      }
+    });
+    if (changed) { dispatch(tr.scrollIntoView()); return true; }
+  }
+
+  // ── Insert: collect text blocks in the selection ─────────────────────────
+  const blocks: { from: number; to: number; content: any }[] = [];
   state.doc.nodesBetween(from, to, (node: any, pos: number) => {
     if (node.isTextblock) {
-      blocks.push({ from: pos, to: pos + node.nodeSize, text: node.textContent });
+      blocks.push({ from: pos, to: pos + node.nodeSize, content: node.content });
       return false;
     }
     return true;
   });
 
+  // Single-block / no-selection fallback
   if (blocks.length === 0) {
     const $from = state.doc.resolve(from);
-    const blockStart = $from.start($from.depth);
-    const blockEnd = $from.end($from.depth);
     const blockNode = $from.parent;
+    const blockStart = $from.start($from.depth);
+    const blockEnd   = $from.end($from.depth);
     const para = paragraphType.create(null, blockNode.content);
     const item = listItemType.create({ checked: false }, para);
     const list = bulletListType.create(null, item);
@@ -283,37 +328,63 @@ export function execInsertChecklist(view: any): boolean {
     return true;
   }
 
+  // Multi-block: replace each block in reverse so positions stay valid
   let tr = state.tr;
-  const reversed = [...blocks].reverse();
-
-  for (const block of reversed) {
-    const para = paragraphType.createChecked(null, schema.text(block.text) as any);
+  for (const block of [...blocks].reverse()) {
+    const para = paragraphType.create(null, block.content);
     const item = listItemType.create({ checked: false }, para);
     const list = bulletListType.create(null, item);
     tr = tr.replaceWith(block.from, block.to, list);
   }
-
   dispatch(tr.scrollIntoView());
-
-  requestAnimationFrame(() => {
-    try {
-      const { state: newState, dispatch: newDispatch } = view;
-      let mergedTr = newState.tr;
-      let changed = false;
-      newState.doc.nodesBetween(from, Math.min(newState.doc.content.size, to + 100), (node: any, pos: number) => {
-        if (node.type === bulletListType) {
-          const $pos = newState.doc.resolve(pos + node.nodeSize);
-          const nextNode = $pos.nodeAfter;
-          if (nextNode && nextNode.type === bulletListType) {
-            mergedTr = mergedTr.join(pos + node.nodeSize);
-            changed = true;
-          }
-        }
-        return true;
-      });
-      if (changed) newDispatch(mergedTr);
-    } catch (_) {}
-  });
-
   return true;
 }
+
+// ─── Checkbox click plugin ────────────────────────────────────────────────────
+// Intercepts mousedown on task-list <li> elements and toggles the checked attr.
+// We use mousedown (not click) so we can preventDefault before ProseMirror
+// moves the cursor, keeping the current cursor position intact.
+
+export const checkboxClickPlugin = $prose(() => {
+  const key = new PluginKey('jn-checkbox-click');
+  return new Plugin({
+    key,
+    props: {
+      handleDOMEvents: {
+        mousedown(view, event) {
+          const target = event.target as HTMLElement;
+          // Only act when the user clicks directly on the <li> or its ::before
+          // pseudo-element (which occupies the left ~20px of the item).
+          const li = target.closest('li[data-item-type="task"]') as HTMLElement | null;
+          if (!li) return false;
+
+          // The ::before pseudo-element is the visual checkbox. It occupies
+          // roughly the first 22px from the left edge of the <li>.
+          const liRect = li.getBoundingClientRect();
+          const clickX = (event as MouseEvent).clientX - liRect.left;
+          if (clickX > 28) return false; // click was in the text area — don't intercept
+
+          event.preventDefault();
+
+          // Find the ProseMirror position of this <li> node
+          const posData = view.posAtDOM(li, 0);
+          const $pos = view.state.doc.resolve(posData);
+          // Walk up to find the list_item node
+          for (let d = $pos.depth; d >= 0; d--) {
+            const node = $pos.node(d);
+            if (node.type.name === 'list_item' && node.attrs.checked != null) {
+              const nodePos = $pos.before(d);
+              const tr = view.state.tr.setNodeMarkup(nodePos, undefined, {
+                ...node.attrs,
+                checked: !node.attrs.checked,
+              });
+              view.dispatch(tr);
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+    },
+  });
+});

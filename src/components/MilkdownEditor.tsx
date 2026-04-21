@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
-  tagDecoratorPlugin, wikilinkPlugin,
+  tagDecoratorPlugin, wikilinkPlugin, checkboxClickPlugin,
   setWikilinkFileList, setOpenFileCallback,
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
@@ -162,7 +162,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(trailing)
       .use(columnResizingPlugin)
       .use(tagDecoratorPlugin)
-      .use(wikilinkPlugin),
+      .use(wikilinkPlugin)
+      .use(checkboxClickPlugin),
     []
   );
 
@@ -348,6 +349,12 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     });
   }, [getView]);
 
+  // Synchronous table command — rAF causes setCellAttr to lose the selection
+  // because selectionchange fires between focus() and the rAF callback.
+  const cmdTable = useCallback((command: any, payload?: any) => {
+    try { editorRef.current?.action(callCommand(command, payload)); } catch (err) { console.warn('[cmdTable]', err); }
+  }, []);
+
   // List with multi-line support
   const cmdList = useCallback((listType: 'bullet_list' | 'ordered_list') => {
     const view = getView();
@@ -513,13 +520,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
           {/* Row controls */}
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Row:</span>
-          <ToolBtn title="Add row above" onClick={() => cmd(addRowBeforeCommand.key)}>
+          <ToolBtn title="Add row above" onClick={() => cmdTable(addRowBeforeCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>↑ Add</span>
           </ToolBtn>
-          <ToolBtn title="Add row below" onClick={() => cmd(addRowAfterCommand.key)}>
+          <ToolBtn title="Add row below" onClick={() => cmdTable(addRowAfterCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>↓ Add</span>
           </ToolBtn>
-          <ToolBtn title="Delete row" danger onClick={() => cmd(deleteSelectedCellsCommand.key)}>
+          <ToolBtn title="Delete row" danger onClick={() => cmdTable(deleteSelectedCellsCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>✕ Row</span>
           </ToolBtn>
 
@@ -527,13 +534,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
           {/* Column controls */}
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Col:</span>
-          <ToolBtn title="Add column left" onClick={() => cmd(addColBeforeCommand.key)}>
+          <ToolBtn title="Add column left" onClick={() => cmdTable(addColBeforeCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>← Add</span>
           </ToolBtn>
-          <ToolBtn title="Add column right" onClick={() => cmd(addColAfterCommand.key)}>
+          <ToolBtn title="Add column right" onClick={() => cmdTable(addColAfterCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>→ Add</span>
           </ToolBtn>
-          <ToolBtn title="Delete column" danger onClick={() => cmd(deleteSelectedCellsCommand.key)}>
+          <ToolBtn title="Delete column" danger onClick={() => cmdTable(deleteSelectedCellsCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>✕ Col</span>
           </ToolBtn>
 
@@ -541,9 +548,9 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
           {/* Alignment */}
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Align:</span>
-          <ToolBtn title="Align left" onClick={() => cmd(setAlignCommand.key, 'left')}><AlignLeft size={12} /></ToolBtn>
-          <ToolBtn title="Align center" onClick={() => cmd(setAlignCommand.key, 'center')}><AlignCenter size={12} /></ToolBtn>
-          <ToolBtn title="Align right" onClick={() => cmd(setAlignCommand.key, 'right')}><AlignRight size={12} /></ToolBtn>
+          <ToolBtn title="Align left" onClick={() => cmdTable(setAlignCommand.key, 'left')}><AlignLeft size={12} /></ToolBtn>
+          <ToolBtn title="Align center" onClick={() => cmdTable(setAlignCommand.key, 'center')}><AlignCenter size={12} /></ToolBtn>
+          <ToolBtn title="Align right" onClick={() => cmdTable(setAlignCommand.key, 'right')}><AlignRight size={12} /></ToolBtn>
 
           <div className="format-toolbar-separator" />
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.4 }}>Tab / Shift+Tab to navigate cells</span>
