@@ -1331,12 +1331,15 @@ app.get('/api/tags', authHeaderOnly, (req: any, res) => {
       if (!file.endsWith('.md')) continue;
 
       const content = fs.readFileSync(fullPath, 'utf-8');
-      // Match #tag after start-of-string, whitespace, or non-word/non-# punctuation.
+      // Match #tag after start-of-string, whitespace, or non-word/non-#/non-& chars.
       // Tag must start with a letter; allow letters/digits/underscore/hyphen after.
-      const tagRegex = /(?:^|[^\w#])#([a-zA-Z][a-zA-Z0-9_-]*)/g;
+      // Exclude HTML/XML hex entity suffixes: #x20, #x72 etc (from &#x20; &#x72;).
+      const tagRegex = /(?:^|[^\w&#])#([a-zA-Z][a-zA-Z0-9_-]*)/g;
+      const isEntitySuffix = (t: string) => /^x[0-9a-fA-F]+$/i.test(t);
       let match;
       while ((match = tagRegex.exec(content)) !== null) {
         const tag = match[1].toLowerCase();
+        if (isEntitySuffix(tag)) continue;
         if (!tagMap.has(tag)) tagMap.set(tag, { count: 0, files: new Set() });
         const tagData = tagMap.get(tag)!;
         tagData.count++;

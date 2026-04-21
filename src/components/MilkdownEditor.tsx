@@ -18,7 +18,6 @@ import {
   addColAfterCommand, addColBeforeCommand,
   addRowAfterCommand, addRowBeforeCommand,
   deleteSelectedCellsCommand,
-  setAlignCommand,
   columnResizingPlugin,
 } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
@@ -31,7 +30,6 @@ import {
   Bookmark, FileText, ClipboardList,
   Bold, Italic, Strikethrough, List, ListOrdered,
   CheckSquare, Code, Quote, Minus, Table, AlertTriangle, RefreshCw,
-  AlignLeft, AlignCenter, AlignRight,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
@@ -298,6 +296,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   });
 
   const editorRef = useRef<Editor | null>(null);
+  const templateMenuRef = useRef<HTMLDivElement | null>(null);
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
@@ -431,6 +430,18 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     return () => document.removeEventListener('selectionchange', check);
   }, [getView]);
 
+  // Close template menu when clicking outside it
+  useEffect(() => {
+    if (!isTemplateMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (templateMenuRef.current && !templateMenuRef.current.contains(e.target as Node)) {
+        setIsTemplateMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [isTemplateMenuOpen]);
+
   // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
     const view = getView();
@@ -516,7 +527,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       {/* Header + Toolbar combined */}
       <div className="flex-shrink-0 border-b border-border-color bg-bg-secondary/50 z-20">
         {/* File path row with inline toolbar */}
-        <div className="flex items-center min-h-0 overflow-hidden">
+        <div className="flex items-center min-h-0 relative">
           {/* File path — compact left side */}
           <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-text-muted flex-shrink-0 min-w-0 max-w-[200px]">
             <FileText size={13} className="text-interactive-accent flex-shrink-0" />
@@ -557,7 +568,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
             <ToolBtn title="Larger (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 11 }}>A⁺</ToolBtn>
             <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 10 }}>A⁻</ToolBtn>
             <div className="format-toolbar-separator" />
-            <div className="relative">
+            <div className="relative" ref={templateMenuRef}>
               <button onClick={() => setIsTemplateMenuOpen(o => !o)}
                 className={`p-1.5 rounded transition-colors ${isTemplateMenuOpen ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
                 title="Insert Template">
@@ -622,14 +633,6 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           <ToolBtn title="Delete column" danger onClick={() => cmdTable(deleteSelectedCellsCommand.key)}>
             <span style={{ fontSize: 10, fontWeight: 700 }}>✕ Col</span>
           </ToolBtn>
-
-          <div className="format-toolbar-separator" />
-
-          {/* Alignment */}
-          <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Align:</span>
-          <ToolBtn title="Align left" onClick={() => cmdTable(setAlignCommand.key, 'left')}><AlignLeft size={12} /></ToolBtn>
-          <ToolBtn title="Align center" onClick={() => cmdTable(setAlignCommand.key, 'center')}><AlignCenter size={12} /></ToolBtn>
-          <ToolBtn title="Align right" onClick={() => cmdTable(setAlignCommand.key, 'right')}><AlignRight size={12} /></ToolBtn>
 
           <div className="format-toolbar-separator" />
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.4 }}>Tab / Shift+Tab to navigate cells</span>

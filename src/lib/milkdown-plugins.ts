@@ -20,14 +20,17 @@ export const tagDecoratorPlugin = $prose(() => {
     props: {
       decorations(state) {
         const decos: Decoration[] = [];
-        // Match tags after start-of-string, whitespace, or any non-word/non-# punctuation
-        const TAG_RE = /(^|[^\w#])(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
+        // Match tags after start-of-string, whitespace, or any non-word/non-# punctuation.
+        // Exclude HTML/XML hex entity suffixes like #x20, #x72 (from &#x20; &#x72;).
+        const TAG_RE = /(^|[^\w&#])(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
+        const isEntitySuffix = (tag: string) => /^#x[0-9a-fA-F]+$/i.test(tag);
         state.doc.descendants((node, pos) => {
           if (!node.isText) return;
           const text = node.text ?? '';
           let m;
           TAG_RE.lastIndex = 0;
           while ((m = TAG_RE.exec(text)) !== null) {
+            if (isEntitySuffix(m[2])) continue;
             const start = pos + m.index + m[1].length;
             decos.push(Decoration.inline(start, start + m[2].length, { class: 'jn-tag' }));
           }
