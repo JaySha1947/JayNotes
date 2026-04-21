@@ -98,6 +98,186 @@ async function uploadImageToServer(file: File): Promise<string> {
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
+// ─── Inline Table Controls ────────────────────────────────────────────────────
+// Renders contextual row/column controls directly adjacent to the active table,
+// similar to Milkdown's own table UX. Positions itself over the editor container
+// using getBoundingClientRect so it stays in sync with scroll.
+
+interface TableControlsState {
+  visible: boolean;
+  tableRect: DOMRect | null;
+  containerRect: DOMRect | null;
+}
+
+interface TableInlineControlsProps {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onCmd: (key: any, payload?: any) => void;
+  addRowAfterKey: any;
+  addRowBeforeKey: any;
+  addColAfterKey: any;
+  addColBeforeKey: any;
+  deleteKey: any;
+  alignKey: any;
+}
+
+const TableInlineControls: React.FC<TableInlineControlsProps> = ({
+  containerRef, onCmd,
+  addRowAfterKey, addRowBeforeKey, addColAfterKey, addColBeforeKey, deleteKey, alignKey,
+}) => {
+  const [state, setState] = useState<TableControlsState>({ visible: false, tableRect: null, containerRect: null });
+  const rafRef = useRef<number>(0);
+
+  const update = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // Find the table that currently contains the cursor (ProseMirror sets .selectedCell or we find focused cell)
+    const activeCell = container.querySelector('.ProseMirror td.selectedCell, .ProseMirror th.selectedCell') as HTMLElement | null;
+    // Fallback: find table containing text cursor (selection inside td/th)
+    const sel = window.getSelection();
+    let tableEl: HTMLTableElement | null = null;
+    if (activeCell) {
+      tableEl = activeCell.closest('table') as HTMLTableElement | null;
+    } else if (sel && sel.rangeCount > 0) {
+      let node: Node | null = sel.getRangeAt(0).commonAncestorContainer;
+      while (node && node !== container) {
+        if ((node as HTMLElement).tagName === 'TABLE') { tableEl = node as HTMLTableElement; break; }
+        node = node.parentNode;
+      }
+    }
+
+    if (!tableEl) {
+      setState(p => p.visible ? { visible: false, tableRect: null, containerRect: null } : p);
+      return;
+    }
+
+    const tableRect = tableEl.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    setState({ visible: true, tableRect, containerRect });
+  }, [containerRef]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const schedule = () => {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(update);
+    };
+
+    // Listen on the container for mouse and selection events
+    container.addEventListener('mouseup', schedule);
+    container.addEventListener('keyup', schedule);
+    container.addEventListener('click', schedule);
+    document.addEventListener('selectionchange', schedule);
+
+    return () => {
+      container.removeEventListener('mouseup', schedule);
+      container.removeEventListener('keyup', schedule);
+      container.removeEventListener('click', schedule);
+      document.removeEventListener('selectionchange', schedule);
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [update, containerRef]);
+
+  if (!state.visible || !state.tableRect || !state.containerRect) return null;
+
+  const { tableRect, containerRect } = state;
+  // Convert viewport coords → coords inside the scrollable container
+  const container = containerRef.current!;
+  const scrollLeft = container.scrollLeft;
+  const scrollTop = container.scrollTop;
+  const left = tableRect.left - containerRect.left + scrollLeft;
+  const top = tableRect.top - containerRect.top + scrollTop;
+  const width = tableRect.width;
+  const height = tableRect.height;
+
+  const btnBase: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', border: 'none', borderRadius: 4,
+    background: 'var(--bg-secondary)', color: 'var(--text-muted)',
+    fontSize: 11, fontWeight: 600, lineHeight: 1,
+    transition: 'background 0.12s, color 0.12s',
+  };
+
+  const iconBtn = (title: string, label: string, onClick: () => void, danger = false): React.ReactNode => (
+    <button
+      key={title}
+      title={title}
+      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); onClick(); }}
+      style={{
+        ...btnBase,
+        background: danger ? 'rgba(220,53,69,0.12)' : 'var(--bg-secondary)',
+        color: danger ? '#e05a6a' : 'var(--text-muted)',
+        width: 22, height: 22,
+      }}
+      onMouseEnter={e => {
+        (e.currentTarget as HTMLElement).style.background = danger ? 'rgba(220,53,69,0.25)' : 'var(--interactive-hover)';
+        (e.currentTarget as HTMLElement).style.color = danger ? '#ff6b7a' : 'var(--text-normal)';
+      }}
+      onMouseLeave={e => {
+        (e.currentTarget as HTMLElement).style.background = danger ? 'rgba(220,53,69,0.12)' : 'var(--bg-secondary)';
+        (e.currentTarget as HTMLElement).style.color = danger ? '#e05a6a' : 'var(--text-muted)';
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  const popupStyle: React.CSSProperties = {
+    position: 'absolute', zIndex: 50,
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--border-color)',
+    borderRadius: 6,
+    boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
+    padding: '3px 4px',
+    display: 'flex', alignItems: 'center', gap: 2,
+    pointerEvents: 'auto',
+  };
+
+  const divider = <div key="div" style={{ width: 1, height: 16, background: 'var(--border-color)', margin: '0 2px' }} />;
+
+  return (
+    <>
+      {/* ── Column controls — centred above the table ── */}
+      <div
+        style={{
+          ...popupStyle,
+          top: top - 32,
+          left: left + width / 2,
+          transform: 'translateX(-50%)',
+          flexDirection: 'row',
+        }}
+      >
+        {iconBtn('Add column left', '←+', () => onCmd(addColBeforeKey))}
+        {iconBtn('Add column right', '+→', () => onCmd(addColAfterKey))}
+        {divider}
+        {iconBtn('Align left', '⬤L', () => onCmd(alignKey, 'left'))}
+        {iconBtn('Align center', '⬤C', () => onCmd(alignKey, 'center'))}
+        {iconBtn('Align right', '⬤R', () => onCmd(alignKey, 'right'))}
+        {divider}
+        {iconBtn('Delete column', '✕Col', () => onCmd(deleteKey), true)}
+      </div>
+
+      {/* ── Row controls — centred to the left of the table ── */}
+      <div
+        style={{
+          ...popupStyle,
+          top: top + height / 2,
+          left: left - 80,
+          transform: 'translateY(-50%)',
+          flexDirection: 'column',
+          padding: '4px 3px',
+        }}
+      >
+        {iconBtn('Add row above', '↑+', () => onCmd(addRowBeforeKey))}
+        {iconBtn('Add row below', '+↓', () => onCmd(addRowAfterKey))}
+        {divider}
+        {iconBtn('Delete row', '✕Row', () => onCmd(deleteKey), true)}
+      </div>
+    </>
+  );
+};
+
 // ─── Inner editor ─────────────────────────────────────────────────────────────
 
 interface InnerProps {
@@ -540,6 +720,17 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
             </div>
           );
         })()}
+        {/* Inline table controls — appear adjacent to the active table */}
+        <TableInlineControls
+          containerRef={editorContainerRef}
+          onCmd={(key, payload) => cmd(key, payload)}
+          addRowAfterKey={addRowAfterCommand.key}
+          addRowBeforeKey={addRowBeforeCommand.key}
+          addColAfterKey={addColAfterCommand.key}
+          addColBeforeKey={addColBeforeCommand.key}
+          deleteKey={deleteSelectedCellsCommand.key}
+          alignKey={setAlignCommand.key}
+        />
         <div className="milkdown-wrapper h-full">
           <MilkdownProvider>
             <InnerMilkdown

@@ -806,3 +806,48 @@ html.light .jn-wikilink-dropdown {
   position: relative !important;
   min-width: 40px !important;
 }
+
+/* ── Inline Table Controls ──────────────────────────────────────────────────── */
+/* The TableInlineControls component renders absolutely inside the scrollable
+   editor container. These styles ensure the buttons look and feel native. */
+
+.jn-table-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, transform 0.1s;
+  user-select: none;
+  flex-shrink: 0;
+}
+.jn-table-ctrl-btn:hover {
+  background: var(--interactive-hover);
+  color: var(--text-normal);
+  transform: scale(1.1);
+}
+.jn-table-ctrl-btn.danger {
+  background: rgba(220, 53, 69, 0.1);
+  color: #e05a6a;
+}
+.jn-table-ctrl-btn.danger:hover {
+  background: rgba(220, 53, 69, 0.25);
+  color: #ff6b7a;
+  transform: scale(1.1);
+}
+html.light .jn-table-ctrl-btn {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+html.light .jn-table-ctrl-btn:hover {
+  background: var(--interactive-hover);
+  color: var(--text-normal);
+}
