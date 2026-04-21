@@ -12,7 +12,6 @@ import {
 } from '@milkdown/preset-commonmark';
 import {
   gfm, toggleStrikethroughCommand, insertTableCommand,
-  columnResizingPlugin, tableEditingPlugin,
 } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { upload, uploadConfig } from '@milkdown/plugin-upload';
@@ -27,7 +26,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
-  tagDecoratorPlugin, wikilinkPlugin, taskListNodeViewPlugin,
+  tagDecoratorPlugin, wikilinkPlugin,
   setWikilinkFileList, subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote,
   WikilinkSuggestion,
@@ -111,7 +110,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(trailing)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
-      .use(taskListNodeViewPlugin),
+      ,
     []
   );
 

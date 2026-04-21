@@ -678,3 +678,47 @@ body {
 .milkdown-wrapper.resize-cursor * {
   cursor: col-resize !important;
 }
+
+/* ── Task list items (GFM renders li[data-item-type="task"]) ─────────────── */
+
+/* Hide default bullet on task items */
+.milkdown-wrapper .editor li[data-item-type="task"] {
+  list-style: none !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 6px !important;
+  margin: 1px 0 !important;
+  padding-left: 0 !important;
+}
+
+/* Render a checkbox using ::before pseudo-element */
+.milkdown-wrapper .editor li[data-item-type="task"]::before {
+  content: '' !important;
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  border: 1.5px solid var(--text-muted) !important;
+  border-radius: 3px !important;
+  margin-top: 3px !important;
+  background: transparent !important;
+  flex-shrink: 0 !important;
+}
+
+/* Checked state — show a checkmark */
+.milkdown-wrapper .editor li[data-item-type="task"][data-checked="true"]::before {
+  background: var(--interactive-accent) !important;
+  border-color: var(--interactive-accent) !important;
+  content: '✓' !important;
+  color: white !important;
+  font-size: 10px !important;
+  line-height: 14px !important;
+  text-align: center !important;
+}
+
+/* Strike through checked item text */
+.milkdown-wrapper .editor li[data-item-type="task"][data-checked="true"] p,
+.milkdown-wrapper .editor li[data-item-type="task"][data-checked="true"] > * {
+  text-decoration: line-through !important;
+  opacity: 0.55 !important;
+}

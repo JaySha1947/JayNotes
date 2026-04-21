@@ -96,63 +96,7 @@ export const wikilinkPlugin = $prose(() => new Plugin({
   },
 }));
 
-// ─── Task list NodeView — adds interactive checkboxes ─────────────────────────
-// Renders li[data-item-type="task"] with a real <input type="checkbox">
-
-const taskKey = new PluginKey('jn-task-nodeview');
-
-export const taskListNodeViewPlugin = $prose(() => new Plugin({
-  key: taskKey,
-  props: {
-    nodeViews: {
-      list_item(node, view, getPos) {
-        // Only intercept task items (checked !== null)
-        if (node.attrs.checked === null || node.attrs.checked === undefined) {
-          return false as any;  // fall through to default rendering
-        }
-
-        const li = document.createElement('li');
-        li.setAttribute('data-item-type', 'task');
-        li.style.cssText = 'list-style:none;display:flex;align-items:flex-start;gap:6px;margin:1px 0;padding:0';
-
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = node.attrs.checked === true;
-        cb.style.cssText = 'margin-top:3px;flex-shrink:0;cursor:pointer;accent-color:var(--interactive-accent)';
-        cb.contentEditable = 'false';
-        cb.addEventListener('mousedown', (e) => {
-          e.preventDefault();
-          const pos = typeof getPos === 'function' ? getPos() : undefined;
-          if (typeof pos !== 'number') return;
-          view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: !node.attrs.checked }));
-        });
-
-        const span = document.createElement('span');
-        span.style.cssText = 'flex:1;min-width:0';
-        if (node.attrs.checked) {
-          span.style.textDecoration = 'line-through';
-          span.style.opacity = '0.55';
-        }
-
-        li.appendChild(cb);
-        li.appendChild(span);
-
-        return {
-          dom: li,
-          contentDOM: span,
-          update(updated) {
-            if (updated.type !== node.type) return false;
-            if (updated.attrs.checked === null || updated.attrs.checked === undefined) return false;
-            cb.checked = updated.attrs.checked === true;
-            span.style.textDecoration = updated.attrs.checked ? 'line-through' : '';
-            span.style.opacity = updated.attrs.checked ? '0.55' : '';
-            return true;
-          },
-        };
-      },
-    },
-  },
-}));
+// Task list items styled via CSS
 
 // ─── Multi-line list wrapping ─────────────────────────────────────────────────
 
