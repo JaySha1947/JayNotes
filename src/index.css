@@ -22,20 +22,18 @@
   --border-color: #363636;
   --error: #f43f5e;
   --success: #10b981;
-  
   color-scheme: dark;
 }
 
 :root.light {
   --bg-primary: #ffffff;
   --bg-secondary: #f2f2f2;
-  --text-normal: #2e3338;
+  --text-normal: #1a1a1a;
   --text-muted: #5c6e74;
   --interactive-hover: #e0e0e0;
   --border-color: #d0d0d0;
   --error: #e11d48;
   --success: #059669;
-  
   color-scheme: light;
 }
 
@@ -48,51 +46,164 @@ body {
   overflow: hidden;
 }
 
-.hide-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.hide-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+/* ── Scrollbars ─────────────────────────────────────────────────────────── */
 
-/* CodeMirror overrides to look like Obsidian */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,200,130,0.3); border-radius: 3px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,200,130,0.5); }
+
+/* ── CodeMirror base ────────────────────────────────────────────────────── */
+
 .cm-editor {
   height: 100%;
   background-color: transparent !important;
   color: var(--text-normal) !important;
 }
+
 .cm-scroller {
   font-family: 'Inter', ui-sans-serif, system-ui, sans-serif !important;
   line-height: 1.6;
   padding: 20px 40px 20px 20px;
-  font-size: var(--editor-font-size, 1rem);
+  font-size: var(--editor-font-size, 15px);
 }
+
 .cm-content {
   max-width: 100%;
-  margin: 0;
   width: 100%;
+  margin: 0;
+  /* Force all editor body text to the theme's normal color.
+     This prevents any markdown token style from leaking into
+     plain body text. */
+  color: var(--text-normal) !important;
 }
-.cm-activeLine {
-  background-color: transparent !important;
+
+/* Make every span inside the content default to the normal color
+   unless it's one of our explicitly styled classes. */
+.cm-content span {
+  color: inherit;
 }
+
+.cm-activeLine { background-color: transparent !important; }
+
+/* Gutter — tight left padding as requested */
 .cm-gutters {
   background-color: transparent !important;
   border-right: none !important;
   color: var(--text-muted) !important;
+  padding-left: 2px !important;
+  min-width: 0 !important;
+}
+.cm-lineNumbers .cm-gutterElement {
+  padding-left: 2px !important;
+  padding-right: 8px !important;
+  min-width: 0 !important;
 }
 .cm-activeLineGutter {
   background-color: transparent !important;
   color: var(--text-normal) !important;
 }
 
-/* Obsidian-specific Markdown Styles */
+/* ── Override oneDark theme token colors that bleed into body text ───────
+   The oneDark theme colors certain markdown tokens (e.g. heading markers,
+   list markers, emphasis) with reds/greens/yellows. We neutralize the ones
+   that cause visible bleed-through on regular text lines.            ───── */
+
+/* Heading markers (# ## ###) — make them accent-colored but don't bleed */
+.cm-header, .cm-header-1, .cm-header-2, .cm-header-3,
+.cm-header-4, .cm-header-5, .cm-header-6 {
+  color: var(--text-normal) !important;
+  font-weight: bold !important;
+}
+
+/* Neutralize any red/orange that oneDark puts on markdown formatting chars */
+.cm-formatting,
+.cm-formatting-header,
+.cm-formatting-list,
+.cm-formatting-quote,
+.cm-formatting-code,
+.cm-formatting-em,
+.cm-formatting-strong,
+.cm-formatting-strikethrough {
+  color: var(--text-muted) !important;
+  opacity: 0.7;
+}
+
+/* List items — content text should be normal color */
+.cm-list,
+.cm-list-1,
+.cm-list-2,
+.cm-list-3 {
+  color: var(--text-normal) !important;
+}
+
+/* Emphasis and strong — keep text readable, no color shift */
+.cm-em { color: var(--text-normal) !important; font-style: italic; }
+.cm-strong { color: var(--text-normal) !important; font-weight: bold; }
+.cm-strikethrough { color: var(--text-muted) !important; text-decoration: line-through; }
+
+/* Inline code */
+.cm-inline-code {
+  color: var(--interactive-accent) !important;
+  background: rgba(0,200,130,0.08);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-family: monospace;
+}
+
+/* Blockquote */
+.cm-quote { color: var(--text-muted) !important; font-style: italic; }
+
+/* Links */
+.cm-url, .cm-link { color: var(--interactive-accent) !important; }
+
+/* CodeMirror 6 uses syntactical token classes — override the ones that
+   cause the "red text after heading" problem. These come from the
+   lezer-based markdown highlighter inside @codemirror/lang-markdown. */
+
+/* The oneDark theme maps `keyword` → red, and lezer-markdown maps
+   some list/heading tokens to keyword. Force them to neutral. */
+.cm-editor .tok-keyword,
+.cm-editor .tok-operator,
+.cm-editor .tok-punctuation {
+  color: var(--text-muted) !important;
+  opacity: 0.8;
+}
+
+/* Heading content itself should be normal text color */
+.cm-editor .tok-heading,
+.cm-editor .tok-heading1,
+.cm-editor .tok-heading2,
+.cm-editor .tok-heading3,
+.cm-editor .tok-heading4,
+.cm-editor .tok-heading5,
+.cm-editor .tok-heading6 {
+  color: var(--text-normal) !important;
+  font-weight: bold;
+}
+
+/* List marker tokens — muted so they don't dominate */
+.cm-editor .tok-list {
+  color: var(--text-muted) !important;
+}
+
+/* Plain content text — always normal color */
+.cm-editor .tok-content,
+.cm-editor .tok-string {
+  color: var(--text-normal) !important;
+}
+
+/* ── Custom decorations (tags, links, callouts, images) ─────────────────── */
+
 .cm-obsidian-tag {
   color: var(--interactive-accent);
-  background-color: rgba(0, 200, 130, 0.2);
+  background-color: rgba(0,200,130,0.15);
   border-radius: 12px;
-  padding: 2px 6px;
-  font-size: 0.9em;
+  padding: 1px 6px;
+  font-size: 0.88em;
 }
 
 .cm-obsidian-link {
@@ -102,65 +213,25 @@ body {
 }
 
 .cm-obsidian-callout {
-  background-color: rgba(0, 122, 255, 0.1);
-  border-left: 4px solid var(--interactive-accent);
+  background-color: rgba(0,122,255,0.08);
+  border-left: 3px solid var(--interactive-accent);
   padding-left: 10px;
   display: block;
   margin: 4px 0;
 }
 
-.cm-obsidian-callout-info { border-left-color: #007aff; background-color: rgba(0, 122, 255, 0.1); }
-.cm-obsidian-callout-warning { border-left-color: #ff9500; background-color: rgba(255, 149, 0, 0.1); }
-.cm-obsidian-callout-error { border-left-color: #ff3b30; background-color: rgba(255, 59, 48, 0.1); }
-.cm-obsidian-callout-success { border-left-color: #34c759; background-color: rgba(52, 199, 89, 0.1); }
-
-/* Custom Scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(0, 200, 130, 0.3);
-  border-radius: 3px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 200, 130, 0.5);
-}
+.cm-obsidian-callout-info    { border-left-color: #007aff; background-color: rgba(0,122,255,0.08); }
+.cm-obsidian-callout-warning { border-left-color: #ff9500; background-color: rgba(255,149,0,0.08); }
+.cm-obsidian-callout-error   { border-left-color: #ff3b30; background-color: rgba(255,59,48,0.08); }
+.cm-obsidian-callout-success { border-left-color: #34c759; background-color: rgba(52,199,89,0.08); }
 
 .cm-obsidian-image-container {
   display: inline-block;
   user-select: none;
 }
 
-/* React Flow Selection Styles */
-.react-flow__selection {
-  background: rgba(0, 200, 130, 0.1);
-  border: 1px solid var(--interactive-accent);
-  border-radius: 4px;
-  z-index: 1000;
-}
+/* ── Formatting toolbar ─────────────────────────────────────────────────── */
 
-.react-flow__nodesselection-rect {
-  stroke: var(--interactive-accent);
-  stroke-dasharray: 4;
-}
-
-/* Mode-specific cursors */
-.pan-mode .react-flow__pane {
-  cursor: grab !important;
-}
-.pan-mode .react-flow__pane:active {
-  cursor: grabbing !important;
-}
-
-.selection-mode .react-flow__pane {
-  cursor: crosshair;
-}
-
-/* Formatting toolbar */
 .format-toolbar {
   display: flex;
   align-items: center;
@@ -171,6 +242,7 @@ body {
   flex-wrap: wrap;
   flex-shrink: 0;
 }
+
 .format-toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -193,8 +265,9 @@ body {
 }
 .format-toolbar-btn.active {
   color: var(--interactive-accent);
-  background: rgba(0, 200, 130, 0.1);
+  background: rgba(0,200,130,0.1);
 }
+
 .format-toolbar-separator {
   width: 1px;
   height: 18px;
@@ -202,6 +275,7 @@ body {
   margin: 0 4px;
   flex-shrink: 0;
 }
+
 .format-toolbar select {
   background: var(--bg-primary);
   color: var(--text-normal);
@@ -213,22 +287,20 @@ body {
   cursor: pointer;
   outline: none;
 }
-.format-toolbar select:hover {
-  border-color: var(--interactive-accent);
-}
-.format-toolbar input[type="color"] {
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  padding: 2px;
-  cursor: pointer;
-}
+.format-toolbar select:hover { border-color: var(--interactive-accent); }
 
-/* Alpha / Roman numeral list marker — same colour as CodeMirror's built-in
-   bullet and numbered list markers (oneDark theme uses a muted highlight) */
-.cm-list-marker-custom {
-  color: var(--interactive-accent);
-  opacity: 0.75;
+/* ── React Flow ─────────────────────────────────────────────────────────── */
+
+.react-flow__selection {
+  background: rgba(0,200,130,0.1);
+  border: 1px solid var(--interactive-accent);
+  border-radius: 4px;
+  z-index: 1000;
 }
+.react-flow__nodesselection-rect {
+  stroke: var(--interactive-accent);
+  stroke-dasharray: 4;
+}
+.pan-mode .react-flow__pane { cursor: grab !important; }
+.pan-mode .react-flow__pane:active { cursor: grabbing !important; }
+.selection-mode .react-flow__pane { cursor: crosshair; }

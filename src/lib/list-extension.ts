@@ -1,84 +1,32 @@
 /**
- * list-extension.ts
+ * list-extension.ts — comprehensive list behaviour for CodeMirror 6
  *
- * CodeMirror 6 extension that adds proper Enter / Tab / Shift+Tab behaviour
- * for ALL list types: bullets (- / * / +), numbered (1.), alphabetic (a.),
- * Roman numeral (i.), and checklists (- [ ] / - [x] ).
+ * Handles: bullet (- * +), numbered (1.), alphabetic (a.), roman (i.),
+ * checklist (- [ ] / - [x])
  *
- * Also exports a syntax-highlighting decorator so alpha/roman markers are
- * coloured the same way as bullet and numbered list markers.
+ * Behaviours implemented:
+ *   Enter  → continue list / exit on empty item
+ *   Tab    → indent list line by 2 spaces (cursor stays after marker)
+ *   Shift-Tab → outdent by 2 spaces
  */
 
 import { keymap } from '@codemirror/view';
-import { EditorState, Transaction } from '@codemirror/state';
-import { indentMore, indentLess } from '@codemirror/commands';
-import {
-  Decoration,
-  DecorationSet,
-  MatchDecorator,
-  ViewPlugin,
-  ViewUpdate,
-} from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── Roman numeral helpers ────────────────────────────────────────────────────
 
-/** Parse a list line, returning the indent, marker, and trailing text. */
-interface ListLine {
-  indent: string;
-  marker: string;   // e.g. "-", "1.", "a.", "iv.", "- [ ]", "- [x]"
-  space: string;    // the space after the marker
-  text: string;     // rest of the content
-  type: 'bullet' | 'numbered' | 'alpha' | 'roman' | 'checklist' | null;
-}
+const ROMAN_SET = new Set(['i','v','x','l','c','d','m']);
 
-// Patterns – order matters (checklist before bullet)
-const LIST_RE =
-  /^(\s*)(- \[[ x]\]|[-*+]|\d+\.|[a-z]{1,3}\.|[ivxlcdm]{1,6}\.)( )(.*)/i;
-
-function parseLine(text: string): ListLine | null {
-  const m = text.match(LIST_RE);
-  if (!m) return null;
-  const marker = m[2];
-  let type: ListLine['type'] = null;
-  if (/^- \[[ x]\]$/.test(marker))          type = 'checklist';
-  else if (/^[-*+]$/.test(marker))            type = 'bullet';
-  else if (/^\d+\.$/.test(marker))            type = 'numbered';
-  else if (/^[a-z]{1,3}\.$/i.test(marker) && !isRoman(marker.slice(0,-1))) type = 'alpha';
-  else if (isRoman(marker.slice(0,-1)))        type = 'roman';
-  else return null;
-  return { indent: m[1], marker, space: m[3], text: m[4], type };
-}
-
-const ROMAN_DIGITS = new Set(['i','v','x','l','c','d','m']);
-function isRoman(s: string): boolean {
+function isRomanStr(s: string): boolean {
   if (!s) return false;
-  const lower = s.toLowerCase();
-  return lower.split('').every(c => ROMAN_DIGITS.has(c));
-}
-
-function nextAlpha(marker: string): string {
-  // marker = "a." → "b.", "z." → "aa."
-  const letters = marker.slice(0, -1);
-  let carry = true;
-  let result = '';
-  for (let i = letters.length - 1; i >= 0; i--) {
-    if (carry) {
-      const code = letters.charCodeAt(i) - 97; // 0-25
-      if (code === 25) { result = 'a' + result; }
-      else { result = String.fromCharCode(code + 1 + 97) + result; carry = false; }
-    } else {
-      result = letters[i] + result;
-    }
-  }
-  if (carry) result = 'a' + result;
-  return result + '.';
+  return s.toLowerCase().split('').every(c => ROMAN_SET.has(c));
 }
 
 function romanToInt(s: string): number {
-  const map: Record<string,number> = {i:1,v:5,x:10,l:50,c:100,d:500,m:1000};
+  const map: Record<string, number> = { i:1, v:5, x:10, l:50, c:100, d:500, m:1000 };
   let n = 0, prev = 0;
   for (let i = s.length - 1; i >= 0; i--) {
-    const val = map[s[i]] ?? 0;
+    const val = map[s[i].toLowerCase()] ?? 0;
     n += val < prev ? -val : val;
     prev = val;
   }
@@ -88,141 +36,159 @@ function romanToInt(s: string): number {
 function intToRoman(n: number): string {
   const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
   const syms = ['m','cm','d','cd','c','xc','l','xl','x','ix','v','iv','i'];
-  let result = '';
+  let r = '';
   for (let i = 0; i < vals.length; i++) {
-    while (n >= vals[i]) { result += syms[i]; n -= vals[i]; }
+    while (n >= vals[i]) { r += syms[i]; n -= vals[i]; }
   }
-  return result;
+  return r;
 }
 
-function nextRoman(marker: string): string {
+// ─── Alpha helpers ────────────────────────────────────────────────────────────
+
+function nextAlphaMarker(marker: string): string {
+  // marker is like "a." or "z." or "az."
   const letters = marker.slice(0, -1).toLowerCase();
-  return intToRoman(romanToInt(letters) + 1) + '.';
+  let carry = true;
+  let result = '';
+  for (let i = letters.length - 1; i >= 0; i--) {
+    if (!carry) { result = letters[i] + result; continue; }
+    const code = letters.charCodeAt(i) - 97;
+    if (code === 25) { result = 'a' + result; }
+    else { result = String.fromCharCode(code + 1 + 97) + result; carry = false; }
+  }
+  if (carry) result = 'a' + result;
+  return result + '.';
 }
 
-function nextMarker(parsed: ListLine): string {
-  switch (parsed.type) {
+// ─── Line parser ──────────────────────────────────────────────────────────────
+
+type ListType = 'bullet' | 'numbered' | 'alpha' | 'roman' | 'checklist';
+
+interface ParsedList {
+  indent: string;
+  marker: string;   // the full marker token, e.g. "a.", "iv.", "- [ ]", "-"
+  text: string;     // content after marker + space
+  type: ListType;
+  markerLen: number; // length of indent + marker + space
+}
+
+/**
+ * Parse a line into list components. Returns null if the line is not a list.
+ * Priority: checklist > bullet > numbered > roman > alpha
+ * (roman before alpha so "iv." isn't mistaken for alpha "iv.")
+ */
+function parseLine(raw: string): ParsedList | null {
+  // Checklist: "  - [ ] text" or "  - [x] text"
+  let m = raw.match(/^(\s*)(- \[[ xX]\])( )(.*)$/);
+  if (m) return { indent: m[1], marker: m[2], text: m[4], type: 'checklist', markerLen: m[1].length + m[2].length + 1 };
+
+  // Bullet: "  - text" or "  * text" or "  + text"
+  m = raw.match(/^(\s*)([-*+])( )(.*)$/);
+  if (m) return { indent: m[1], marker: m[2], text: m[4], type: 'bullet', markerLen: m[1].length + m[2].length + 1 };
+
+  // Numbered: "  1. text"
+  m = raw.match(/^(\s*)(\d+\.)( )(.*)$/);
+  if (m) return { indent: m[1], marker: m[2], text: m[4], type: 'numbered', markerLen: m[1].length + m[2].length + 1 };
+
+  // Roman or Alpha — distinguish by checking if all letters are roman digits
+  // Pattern: "  iv. text" or "  b. text"
+  m = raw.match(/^(\s*)([a-z]{1,6}\.)( )(.*)$/i);
+  if (m) {
+    const letters = m[2].slice(0, -1);
+    const type: ListType = isRomanStr(letters) ? 'roman' : 'alpha';
+    return { indent: m[1], marker: m[2], text: m[4], type, markerLen: m[1].length + m[2].length + 1 };
+  }
+
+  return null;
+}
+
+/** Compute the next marker in sequence for a given parsed list line */
+function nextMarker(p: ParsedList): string {
+  switch (p.type) {
+    case 'checklist': return '- [ ]';
+    case 'bullet':    return p.marker;
     case 'numbered': {
-      const n = parseInt(parsed.marker, 10);
+      const n = parseInt(p.marker, 10);
       return `${n + 1}.`;
     }
-    case 'alpha':    return nextAlpha(parsed.marker);
-    case 'roman':    return nextRoman(parsed.marker);
-    case 'checklist': return '- [ ]';
-    default:         return parsed.marker; // bullet stays the same
+    case 'alpha': return nextAlphaMarker(p.marker);
+    case 'roman': {
+      const n = romanToInt(p.marker.slice(0, -1));
+      return intToRoman(n + 1) + '.';
+    }
   }
 }
 
-// ─── Enter handler ─────────────────────────────────────────────────────────────
-
-function handleEnter(state: EditorState): Transaction | null {
-  const range = state.selection.main;
-  if (range.from !== range.to) return null; // has selection – don't intercept
-
-  const line = state.doc.lineAt(range.from);
-  const parsed = parseLine(line.text);
-  if (!parsed) return null;
-
-  // Cursor must be after the marker+space
-  const markerEnd = line.from + parsed.indent.length + parsed.marker.length + 1;
-  if (range.from < markerEnd) return null;
-
-  // Empty list item (only marker, no text) → exit list
-  if (parsed.text.trim() === '') {
-    return state.update({
-      changes: { from: line.from, to: line.to, insert: '' },
-      selection: { anchor: line.from },
-    });
-  }
-
-  // Continue list with next marker
-  const next = nextMarker(parsed);
-  const insert = '\n' + parsed.indent + next + ' ';
-  return state.update({
-    changes: { from: range.from, to: range.to, insert },
-    selection: { anchor: range.from + insert.length },
-  });
-}
-
-// ─── Tab / Shift+Tab handlers ──────────────────────────────────────────────────
-
-function handleTab(state: EditorState): Transaction | null {
-  const line = state.doc.lineAt(state.selection.main.from);
-  if (!parseLine(line.text)) return null; // not a list line
-  return indentMore({ state, dispatch: () => {} }) as any ?? null;
-}
-
-function handleShiftTab(state: EditorState): Transaction | null {
-  const line = state.doc.lineAt(state.selection.main.from);
-  if (!parseLine(line.text)) return null;
-  return indentLess({ state, dispatch: () => {} }) as any ?? null;
-}
-
-// ─── Export: keymap extension ──────────────────────────────────────────────────
+// ─── Keymap ───────────────────────────────────────────────────────────────────
 
 export const listKeymap = keymap.of([
   {
     key: 'Enter',
     run(view) {
-      const tr = handleEnter(view.state);
-      if (!tr) return false;
-      view.dispatch(tr);
-      return true;
-    },
-  },
-  {
-    key: 'Tab',
-    run(view) {
-      const line = view.state.doc.lineAt(view.state.selection.main.from);
-      if (!parseLine(line.text)) return false;
-      // Indent by 2 spaces
-      const { from } = view.state.selection.main;
-      const lineStart = view.state.doc.lineAt(from).from;
-      view.dispatch(view.state.update({
-        changes: { from: lineStart, insert: '  ' },
-        selection: { anchor: from + 2 },
+      const state = view.state;
+      const sel = state.selection.main;
+      // Only handle cursor (no selection)
+      if (sel.from !== sel.to) return false;
+
+      const line = state.doc.lineAt(sel.from);
+      const parsed = parseLine(line.text);
+      if (!parsed) return false;
+
+      // Cursor must be at or after the end of the marker
+      const markerEnd = line.from + parsed.markerLen;
+      if (sel.from < markerEnd) return false;
+
+      // Empty item → exit list (replace line with blank line)
+      if (parsed.text.trim() === '' && sel.from >= markerEnd) {
+        view.dispatch(state.update({
+          changes: { from: line.from, to: line.to, insert: '' },
+          selection: { anchor: line.from },
+        }));
+        return true;
+      }
+
+      // Continue list: insert newline + indent + nextMarker + space
+      const next = nextMarker(parsed);
+      const insert = '\n' + parsed.indent + next + ' ';
+      view.dispatch(state.update({
+        changes: { from: sel.from, to: sel.to, insert },
+        selection: { anchor: sel.from + insert.length },
       }));
       return true;
     },
   },
+
+  {
+    key: 'Tab',
+    run(view) {
+      const state = view.state;
+      const line = state.doc.lineAt(state.selection.main.from);
+      if (!parseLine(line.text)) return false;
+      // Prepend 2 spaces to the line; keep cursor relative position
+      const cur = state.selection.main.from;
+      view.dispatch(state.update({
+        changes: { from: line.from, to: line.from, insert: '  ' },
+        selection: { anchor: cur + 2 },
+      }));
+      return true;
+    },
+  },
+
   {
     key: 'Shift-Tab',
     run(view) {
-      const line = view.state.doc.lineAt(view.state.selection.main.from);
+      const state = view.state;
+      const line = state.doc.lineAt(state.selection.main.from);
       const parsed = parseLine(line.text);
       if (!parsed) return false;
       if (parsed.indent.length === 0) return false;
-      // Remove up to 2 spaces of indent
       const remove = Math.min(2, parsed.indent.length);
-      view.dispatch(view.state.update({
+      const cur = state.selection.main.from;
+      view.dispatch(state.update({
         changes: { from: line.from, to: line.from + remove, insert: '' },
-        selection: { anchor: Math.max(line.from, view.state.selection.main.from - remove) },
+        selection: { anchor: Math.max(line.from, cur - remove) },
       }));
       return true;
     },
   },
 ]);
-
-// ─── Export: marker syntax highlighter ────────────────────────────────────────
-
-// Matches alpha/roman list markers at line start so they get the same colour
-// treatment as bullet/numbered markers (which CodeMirror's markdown extension
-// already handles). We only match markers that are NOT already markdown tokens.
-const alphaRomanDecorator = new MatchDecorator({
-  // matches lines starting with optional indent then alpha or roman marker
-  regexp: /^(?:[ \t]*)([a-z]{1,3}\.|[ivxlcdm]{1,6}\.) /gim,
-  decoration: () => Decoration.mark({ class: 'cm-list-marker-custom' }),
-});
-
-export const alphaRomanMarkerPlugin = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: any) {
-      this.decorations = alphaRomanDecorator.createDeco(view);
-    }
-    update(update: ViewUpdate) {
-      this.decorations = alphaRomanDecorator.updateDeco(update, this.decorations);
-    }
-  },
-  { decorations: v => v.decorations }
-);

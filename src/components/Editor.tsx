@@ -7,11 +7,11 @@ import { EditorView } from '@codemirror/view';
 import { autocompletion, CompletionContext } from '@codemirror/autocomplete';
 import {
   Bookmark, FileText, ClipboardList,
-  Bold, Italic, Strikethrough, List, ListOrdered, CheckSquare, Palette
+  Bold, Italic, Strikethrough, List, ListOrdered, CheckSquare,
 } from 'lucide-react';
 
 import { tagPlugin, linkPlugin, calloutPlugin, imagePlugin } from '../lib/editor-extensions';
-import { listKeymap, alphaRomanMarkerPlugin } from '../lib/list-extension';
+import { listKeymap } from '../lib/list-extension';
 import { apiFetch } from '../lib/api';
 
 interface EditorProps {
@@ -19,30 +19,59 @@ interface EditorProps {
   onOpenFile?: (path: string) => void;
   isBookmarked?: boolean;
   onToggleBookmark?: () => void;
-  onSplitRight?: () => void; // retained for interface compat, not rendered
+  onSplitRight?: () => void;
   templates?: { name: string, path: string, type: string }[];
 }
 
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
-function getAlphaPrefix(n: number): string {
-  let result = '';
-  while (n > 0) {
-    result = String.fromCharCode(((n - 1) % 26) + 97) + result;
-    n = Math.floor((n - 1) / 26);
+// ─── Roman numeral helpers (needed for toolbar insertions) ────────────────────
+function intToRoman(n: number): string {
+  const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
+  const syms = ['m','cm','d','cd','c','xc','l','xl','x','ix','v','iv','i'];
+  let r = '';
+  for (let i = 0; i < vals.length; i++) {
+    while (n >= vals[i]) { r += syms[i]; n -= vals[i]; }
   }
+  return r;
+}
+
+function romanToInt(s: string): number {
+  const map: Record<string,number> = {i:1,v:5,x:10,l:50,c:100,d:500,m:1000};
+  let n = 0, prev = 0;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const val = map[s[i].toLowerCase()] ?? 0;
+    n += val < prev ? -val : val;
+    prev = val;
+  }
+  return n;
+}
+
+function nextAlphaMarker(marker: string): string {
+  const letters = marker.slice(0, -1).toLowerCase();
+  let carry = true;
+  let result = '';
+  for (let i = letters.length - 1; i >= 0; i--) {
+    if (!carry) { result = letters[i] + result; continue; }
+    const code = letters.charCodeAt(i) - 97;
+    if (code === 25) { result = 'a' + result; }
+    else { result = String.fromCharCode(code + 1 + 97) + result; carry = false; }
+  }
+  if (carry) result = 'a' + result;
   return result + '.';
 }
 
-function getRomanPrefix(n: number): string {
-  const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
-  const syms = ['m','cm','d','cd','c','xc','l','xl','x','ix','v','iv','i'];
-  let result = '';
-  for (let i = 0; i < vals.length; i++) {
-    while (n >= vals[i]) { result += syms[i]; n -= vals[i]; }
-  }
-  return result + '.';
+// Strip any existing list prefix from a line
+const LIST_PREFIX_RE = /^(\s*)(- \[[ xX]\] |[-*+] |\d+\. |[a-z]{1,6}\. )/i;
+function stripListPrefix(text: string): string {
+  return text.replace(LIST_PREFIX_RE, '$1');
+}
+
+// Detect if a line is a roman-style marker
+const ROMAN_SET = new Set(['i','v','x','l','c','d','m']);
+function isRomanStr(s: string): boolean {
+  return s.length > 0 && s.toLowerCase().split('').every(c => ROMAN_SET.has(c));
 }
 
 export const Editor: React.FC<EditorProps> = ({
@@ -54,14 +83,11 @@ export const Editor: React.FC<EditorProps> = ({
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [fontSize, setFontSize] = useState<number>(DEFAULT_FONT_SIZE);
   const editorRef = useRef<any>(null);
-  const colorInputRef = useRef<HTMLInputElement>(null);
 
-  // Apply font size to editor via CSS variable on the editor wrapper
   useEffect(() => {
     document.documentElement.style.setProperty('--editor-font-size', `${fontSize}px`);
   }, [fontSize]);
 
-  // Ctrl +/- font scaling keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return;
@@ -177,8 +203,7 @@ export const Editor: React.FC<EditorProps> = ({
           const formData = new FormData();
           const ext = file.name && file.name !== 'image.png' ? file.name.split('.').pop() : 'png';
           const newFileName = file.name === 'image.png' ? `pasted-image-${Date.now()}.${ext}` : file.name;
-          const uploadFile = new File([file], newFileName, { type: file.type });
-          formData.append('file', uploadFile);
+          formData.append('file', new File([file], newFileName, { type: file.type }));
           const placeholder = `![Uploading ${newFileName}...]()`;
           const insertPos = view.state.selection.main.head;
           view.dispatch({ changes: { from: insertPos, insert: placeholder } });
@@ -188,10 +213,7 @@ export const Editor: React.FC<EditorProps> = ({
             headers: { 'Authorization': `Bearer ${token}` },
             body: formData
           }).then(async res => {
-            if (!res.ok) {
-              const text = await res.text();
-              throw new Error(text || `HTTP ${res.status}`);
-            }
+            if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
             return res.json();
           }).then(data => {
             const text = data.path ? `![image](/api/${data.path})` : `Failed to upload: ${newFileName}`;
@@ -200,9 +222,8 @@ export const Editor: React.FC<EditorProps> = ({
             if (index !== -1) view.dispatch({ changes: { from: index, to: index + placeholder.length, insert: text } });
           }).catch(err => {
             let errMsg = err.message;
-            if (errMsg.includes('<!DOCTYPE') || errMsg.includes('<!doctype')) {
-              errMsg = 'Server returned an HTML error (possibly file size too large or proxy issue).';
-            }
+            if (errMsg.includes('<!DOCTYPE') || errMsg.includes('<!doctype'))
+              errMsg = 'Server returned an HTML error.';
             const docText = view.state.doc.toString();
             const index = docText.indexOf(placeholder);
             if (index !== -1) view.dispatch({ changes: { from: index, to: index + placeholder.length, insert: `> ❌ Upload failed: ${errMsg}` } });
@@ -225,10 +246,11 @@ export const Editor: React.FC<EditorProps> = ({
     };
   }, [files]);
 
-  // ── Formatting helpers ──────────────────────────────────────────────────────
+  // ─── Toolbar action helpers ───────────────────────────────────────────────
 
   const getView = () => editorRef.current?.view;
 
+  /** Toggle an inline marker like ** or ~~ around the selection */
   const toggleInline = (marker: string) => {
     const view = getView();
     if (!view) return;
@@ -251,92 +273,196 @@ export const Editor: React.FC<EditorProps> = ({
     view.focus();
   };
 
-  const toggleLinePrefix = (prefix: string) => {
-    const view = getView();
-    if (!view) return;
-    const { from } = view.state.selection.main;
-    const line = view.state.doc.lineAt(from);
-    if (line.text.startsWith(prefix)) {
-      view.dispatch({ changes: { from: line.from, to: line.from + prefix.length, insert: '' } });
-    } else {
-      const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s|[a-z]+\.\s|[ivxlcdm]+\.\s|\- \[[ x]\] )/i, '$1');
-      view.dispatch({ changes: { from: line.from, to: line.to, insert: prefix + stripped } });
-    }
-    view.focus();
-  };
-
-  const insertChecklist = () => {
-    const view = getView();
-    if (!view) return;
-    const { from } = view.state.selection.main;
-    const line = view.state.doc.lineAt(from);
-    if (line.text.startsWith('- [ ] ') || line.text.startsWith('- [x] ')) {
-      view.dispatch({ changes: { from: line.from, to: line.from + 6, insert: '' } });
-    } else {
-      const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s)/i, '$1');
-      view.dispatch({ changes: { from: line.from, to: line.to, insert: '- [ ] ' + stripped } });
-    }
-    view.focus();
-  };
-
-  const toggleAlphaList = () => {
-    const view = getView();
-    if (!view) return;
-    const { from } = view.state.selection.main;
-    const line = view.state.doc.lineAt(from);
-    // If already an alpha list item, remove it
-    if (/^[a-z]{1,3}\. /i.test(line.text)) {
-      const m = line.text.match(/^([a-z]{1,3}\. )/i)!;
-      view.dispatch({ changes: { from: line.from, to: line.from + m[1].length, insert: '' } });
-      view.focus();
-      return;
-    }
-    // Count preceding consecutive alpha-list lines to determine position
-    let count = 1;
-    let lineNum = line.number - 1;
-    while (lineNum >= 1) {
-      const prev = view.state.doc.line(lineNum);
-      if (/^[a-z]{1,3}\. /i.test(prev.text)) { count++; lineNum--; } else break;
-    }
-    const prefix = getAlphaPrefix(count) + ' ';
-    // Strip any existing list prefix then prepend
-    const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s|[a-z]{1,3}\.\s|[ivxlcdm]{1,6}\.\s|- \[[ x]\] )/i, '$1');
-    view.dispatch({ changes: { from: line.from, to: line.to, insert: prefix + stripped } });
-    view.focus();
-  };
-
-  const toggleRomanList = () => {
-    const view = getView();
-    if (!view) return;
-    const { from } = view.state.selection.main;
-    const line = view.state.doc.lineAt(from);
-    // If already a roman list item, remove it
-    if (/^[ivxlcdm]{1,6}\. /i.test(line.text)) {
-      const m = line.text.match(/^([ivxlcdm]{1,6}\. )/i)!;
-      view.dispatch({ changes: { from: line.from, to: line.from + m[1].length, insert: '' } });
-      view.focus();
-      return;
-    }
-    // Count preceding consecutive roman-list lines
-    let count = 1;
-    let lineNum = line.number - 1;
-    while (lineNum >= 1) {
-      const prev = view.state.doc.line(lineNum);
-      if (/^[ivxlcdm]{1,6}\. /i.test(prev.text)) { count++; lineNum--; } else break;
-    }
-    const prefix = getRomanPrefix(count) + ' ';
-    const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s|[a-z]{1,3}\.\s|[ivxlcdm]{1,6}\.\s|- \[[ x]\] )/i, '$1');
-    view.dispatch({ changes: { from: line.from, to: line.to, insert: prefix + stripped } });
-    view.focus();
-  };
-
-  const insertColor = (color: string) => {
+  /**
+   * Apply a simple line prefix (bullet, numbered) to selected lines or current line.
+   * Toggles off if the line already starts with that prefix.
+   */
+  const applyBulletPrefix = (prefix: string) => {
     const view = getView();
     if (!view) return;
     const { from, to } = view.state.selection.main;
-    const selected = view.state.sliceDoc(from, to) || 'colored text';
-    const insert = `<span style="color:${color}">${selected}</span>`;
-    view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length } });
+    const firstLine = view.state.doc.lineAt(from);
+    const lastLine = view.state.doc.lineAt(to);
+    const changes: { from: number; to: number; insert: string }[] = [];
+
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      if (line.text.startsWith(prefix)) {
+        changes.push({ from: line.from, to: line.from + prefix.length, insert: '' });
+      } else {
+        const stripped = stripListPrefix(line.text);
+        changes.push({ from: line.from, to: line.to, insert: prefix + stripped });
+      }
+    }
+    view.dispatch(view.state.update({ changes }));
+    view.focus();
+  };
+
+  /**
+   * Apply alphabetic list markers to selected lines (or current line).
+   * Correctly numbers each selected line in sequence.
+   */
+  const applyAlphaList = () => {
+    const view = getView();
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const firstLine = view.state.doc.lineAt(from);
+    const lastLine = view.state.doc.lineAt(to);
+
+    // Check if all selected lines are already alpha-listed (toggle off)
+    let allAlpha = true;
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      if (!/^[a-z]{1,6}\. /i.test(line.text)) { allAlpha = false; break; }
+    }
+
+    // Determine starting count by looking at the line above
+    let startCount = 1;
+    if (firstLine.number > 1) {
+      const prevLine = view.state.doc.line(firstLine.number - 1);
+      const m = prevLine.text.match(/^([a-z]{1,6})\. /i);
+      if (m && !isRomanStr(m[1])) {
+        // count preceding alpha lines to find position
+        let n = firstLine.number - 1;
+        let c = 1;
+        while (n > 1) {
+          const pl = view.state.doc.line(n - 1);
+          const pm = pl.text.match(/^([a-z]{1,6})\. /i);
+          if (pm && !isRomanStr(pm[1])) { c++; n--; } else break;
+        }
+        // Next after c items
+        let marker = 'a.';
+        for (let i = 0; i < c; i++) marker = nextAlphaMarker(marker);
+        startCount = -1; // signal: use marker directly
+        const changes: { from: number; to: number; insert: string }[] = [];
+        let cur = marker;
+        for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+          const line = view.state.doc.line(ln);
+          const stripped = allAlpha ? line.text.replace(/^[a-z]{1,6}\. /i, '') : stripListPrefix(line.text);
+          if (allAlpha) {
+            changes.push({ from: line.from, to: line.to, insert: stripped });
+          } else {
+            changes.push({ from: line.from, to: line.to, insert: cur + ' ' + stripped });
+            cur = nextAlphaMarker(cur);
+          }
+        }
+        const firstChangeTo = changes[0].from + (allAlpha ? 0 : changes[0].insert.length);
+        view.dispatch(view.state.update({
+          changes,
+          selection: { anchor: firstChangeTo },
+        }));
+        view.focus();
+        return;
+      }
+    }
+
+    const changes: { from: number; to: number; insert: string }[] = [];
+    let markerIdx = startCount;
+    // Build alpha marker from index
+    function idxToAlpha(n: number): string {
+      let result = '';
+      while (n > 0) {
+        result = String.fromCharCode(((n - 1) % 26) + 97) + result;
+        n = Math.floor((n - 1) / 26);
+      }
+      return result + '.';
+    }
+
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      const stripped = allAlpha ? line.text.replace(/^[a-z]{1,6}\. /i, '') : stripListPrefix(line.text);
+      if (allAlpha) {
+        changes.push({ from: line.from, to: line.to, insert: stripped });
+      } else {
+        const marker = idxToAlpha(markerIdx++);
+        changes.push({ from: line.from, to: line.to, insert: marker + ' ' + stripped });
+      }
+    }
+
+    // Place cursor after first marker
+    const firstInsert = changes[0].insert;
+    const newCursor = changes[0].from + (allAlpha ? 0 : firstInsert.length);
+    view.dispatch(view.state.update({
+      changes,
+      selection: { anchor: newCursor },
+    }));
+    view.focus();
+  };
+
+  /**
+   * Apply Roman numeral list markers to selected lines (or current line).
+   */
+  const applyRomanList = () => {
+    const view = getView();
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const firstLine = view.state.doc.lineAt(from);
+    const lastLine = view.state.doc.lineAt(to);
+
+    // Check if all selected lines are already roman-listed (toggle off)
+    let allRoman = true;
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      const m = line.text.match(/^([a-z]{1,6})\. /i);
+      if (!m || !isRomanStr(m[1])) { allRoman = false; break; }
+    }
+
+    // Determine starting roman number
+    let startN = 1;
+    if (firstLine.number > 1) {
+      const prevLine = view.state.doc.line(firstLine.number - 1);
+      const m = prevLine.text.match(/^([a-z]{1,6})\. /i);
+      if (m && isRomanStr(m[1])) {
+        startN = romanToInt(m[1]) + 1;
+      }
+    }
+
+    const changes: { from: number; to: number; insert: string }[] = [];
+    let n = startN;
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      const stripped = allRoman
+        ? line.text.replace(/^[a-z]{1,6}\. /i, '')
+        : stripListPrefix(line.text);
+      if (allRoman) {
+        changes.push({ from: line.from, to: line.to, insert: stripped });
+      } else {
+        const marker = intToRoman(n++) + '.';
+        changes.push({ from: line.from, to: line.to, insert: marker + ' ' + stripped });
+      }
+    }
+
+    const firstInsert = changes[0].insert;
+    const newCursor = changes[0].from + (allRoman ? 0 : firstInsert.length);
+    view.dispatch(view.state.update({
+      changes,
+      selection: { anchor: newCursor },
+    }));
+    view.focus();
+  };
+
+  /** Toggle checklist prefix on current/selected lines */
+  const applyChecklist = () => {
+    const view = getView();
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const firstLine = view.state.doc.lineAt(from);
+    const lastLine = view.state.doc.lineAt(to);
+    const changes: { from: number; to: number; insert: string }[] = [];
+
+    for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+      const line = view.state.doc.line(ln);
+      if (/^- \[[ xX]\] /.test(line.text)) {
+        // Remove checklist
+        changes.push({ from: line.from, to: line.from + 6, insert: '' });
+      } else {
+        const stripped = stripListPrefix(line.text);
+        changes.push({ from: line.from, to: line.to, insert: '- [ ] ' + stripped });
+      }
+    }
+
+    const newCursor = changes[0].from + changes[0].insert.length;
+    view.dispatch(view.state.update({ changes, selection: { anchor: newCursor } }));
     view.focus();
   };
 
@@ -387,12 +513,9 @@ export const Editor: React.FC<EditorProps> = ({
               <Bookmark size={14} fill={isBookmarked ? 'currentColor' : 'none'} />
             </button>
           )}
-
-          <span className="text-xs text-text-muted px-1 select-none tabular-nums" title="Ctrl+= / Ctrl+- to scale  |  Ctrl+0 to reset">
+          <span className="text-xs text-text-muted px-1 select-none tabular-nums" title="Ctrl+= / Ctrl+- to scale | Ctrl+0 to reset">
             {fontSize}px
           </span>
-
-          {/* Template menu */}
           <div className="relative">
             <button
               onClick={() => setIsTemplateMenuOpen(!isTemplateMenuOpen)}
@@ -411,11 +534,8 @@ export const Editor: React.FC<EditorProps> = ({
                     <div className="px-3 py-2 text-xs text-text-muted italic">No text templates found</div>
                   ) : (
                     templates.filter(t => t.type === 'file').map(t => (
-                      <button
-                        key={t.path}
-                        onClick={() => handleApplyTemplate(t)}
-                        className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate"
-                      >
+                      <button key={t.path} onClick={() => handleApplyTemplate(t)}
+                        className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate">
                         {t.name}
                       </button>
                     ))
@@ -429,107 +549,43 @@ export const Editor: React.FC<EditorProps> = ({
 
       {/* Formatting toolbar */}
       <div className="format-toolbar">
-        <button className="format-toolbar-btn" title="Bold" onClick={() => toggleInline('**')}>
-          <Bold size={13} />
-        </button>
-        <button className="format-toolbar-btn" title="Italic" onClick={() => toggleInline('*')}>
-          <Italic size={13} />
-        </button>
-        <button className="format-toolbar-btn" title="Strikethrough" onClick={() => toggleInline('~~')}>
-          <Strikethrough size={13} />
-        </button>
+        {/* Inline formatting */}
+        <button className="format-toolbar-btn" title="Bold" onClick={() => toggleInline('**')}><Bold size={13} /></button>
+        <button className="format-toolbar-btn" title="Italic" onClick={() => toggleInline('*')}><Italic size={13} /></button>
+        <button className="format-toolbar-btn" title="Strikethrough" onClick={() => toggleInline('~~')}><Strikethrough size={13} /></button>
 
         <div className="format-toolbar-separator" />
 
-        <select
-          title="Font size"
+        {/* Font size */}
+        <select title="Font size"
           value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
-          onChange={e => setFontSize(Number(e.target.value))}
-        >
-          {FONT_SIZES.map(s => (
-            <option key={s} value={s}>{s}px</option>
-          ))}
-          {!FONT_SIZES.includes(fontSize) && (
-            <option value={fontSize}>{fontSize}px</option>
-          )}
+          onChange={e => setFontSize(Number(e.target.value))}>
+          {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
+          {!FONT_SIZES.includes(fontSize) && <option value={fontSize}>{fontSize}px</option>}
         </select>
-
-        <button
-          className="format-toolbar-btn"
-          title="Increase font size (Ctrl + +)"
-          onClick={() => setFontSize(prev => Math.min(prev + 1, 40))}
-          style={{ fontWeight: 700, fontSize: 13 }}
-        >
-          A⁺
-        </button>
-        <button
-          className="format-toolbar-btn"
-          title="Decrease font size (Ctrl + -)"
-          onClick={() => setFontSize(prev => Math.max(prev - 1, 8))}
-          style={{ fontWeight: 500, fontSize: 11 }}
-        >
-          A⁻
-        </button>
-        <button
-          className="format-toolbar-btn"
-          title="Reset font size (Ctrl + 0)"
-          onClick={() => setFontSize(DEFAULT_FONT_SIZE)}
-          style={{ fontSize: 10 }}
-        >
-          ↺
-        </button>
+        <button className="format-toolbar-btn" title="Increase font size (Ctrl++)"
+          onClick={() => setFontSize(prev => Math.min(prev + 1, 40))} style={{ fontWeight: 700, fontSize: 13 }}>A⁺</button>
+        <button className="format-toolbar-btn" title="Decrease font size (Ctrl+-)"
+          onClick={() => setFontSize(prev => Math.max(prev - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</button>
+        <button className="format-toolbar-btn" title="Reset font size (Ctrl+0)"
+          onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</button>
 
         <div className="format-toolbar-separator" />
 
-        <button
-          className="format-toolbar-btn"
-          title="Font color"
-          onClick={() => colorInputRef.current?.click()}
-          style={{ position: 'relative' }}
-        >
-          <Palette size={13} />
-          <input
-            ref={colorInputRef}
-            type="color"
-            defaultValue="#00c882"
-            style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
-            onChange={e => insertColor(e.target.value)}
-          />
-        </button>
+        {/* List types */}
+        <button className="format-toolbar-btn" title="Bullet list" onClick={() => applyBulletPrefix('- ')}><List size={13} /></button>
+        <button className="format-toolbar-btn" title="Numbered list" onClick={() => applyBulletPrefix('1. ')}><ListOrdered size={13} /></button>
+        <button className="format-toolbar-btn" title="Alphabetic list (a. b. c.)"
+          onClick={applyAlphaList} style={{ fontWeight: 600, fontSize: 11 }}>a.</button>
+        <button className="format-toolbar-btn" title="Roman numeral list (i. ii. iii.)"
+          onClick={applyRomanList} style={{ fontWeight: 600, fontSize: 11 }}>i.</button>
 
         <div className="format-toolbar-separator" />
 
-        <button className="format-toolbar-btn" title="Bullet list" onClick={() => toggleLinePrefix('- ')}>
-          <List size={13} />
-        </button>
-        <button className="format-toolbar-btn" title="Numbered list" onClick={() => toggleLinePrefix('1. ')}>
-          <ListOrdered size={13} />
-        </button>
-        <button
-          className="format-toolbar-btn"
-          title="Alphabetic list"
-          onClick={toggleAlphaList}
-          style={{ fontWeight: 600, fontSize: 11, letterSpacing: '-0.5px' }}
-        >
-          a.
-        </button>
-        <button
-          className="format-toolbar-btn"
-          title="Roman numeral list"
-          onClick={toggleRomanList}
-          style={{ fontWeight: 600, fontSize: 11, letterSpacing: '-0.5px' }}
-        >
-          i.
-        </button>
-
-        <div className="format-toolbar-separator" />
-
-        <button className="format-toolbar-btn" title="Checklist / task item" onClick={insertChecklist}>
-          <CheckSquare size={13} />
-        </button>
+        <button className="format-toolbar-btn" title="Checklist / task item" onClick={applyChecklist}><CheckSquare size={13} /></button>
       </div>
 
-      {/* Editor content */}
+      {/* Editor */}
       <div className="flex-grow min-w-0 overflow-auto custom-scrollbar">
         <CodeMirror
           ref={editorRef}
@@ -543,7 +599,6 @@ export const Editor: React.FC<EditorProps> = ({
             linkPlugin,
             calloutPlugin,
             imagePlugin,
-            alphaRomanMarkerPlugin,
             autocompletion({ override: [linkCompletion] }),
             EditorView.lineWrapping,
             pasteHandler,
@@ -557,11 +612,8 @@ export const Editor: React.FC<EditorProps> = ({
                   let end = pos - line.from;
                   while (start > 0 && text.slice(start - 2, start) !== '[[') start--;
                   while (end < text.length && text.slice(end, end + 2) !== ']]') end++;
-                  if (
-                    start > 0 && end < text.length &&
-                    text.slice(start - 2, start) === '[[' &&
-                    text.slice(end, end + 2) === ']]'
-                  ) {
+                  if (start > 0 && end < text.length &&
+                    text.slice(start - 2, start) === '[[' && text.slice(end, end + 2) === ']]') {
                     const linkTarget = text.slice(start, end).split('|')[0];
                     if (onOpenFile) { onOpenFile(`${linkTarget}.md`); return true; }
                   }
