@@ -218,6 +218,7 @@ export default function App() {
         setTabs(prev => prev.filter(t => t.path !== path));
         if (activeTabId === path) setActiveTabId(null);
         setRefreshTrigger(prev => prev + 1);
+        window.dispatchEvent(new CustomEvent('file-saved'));
       }
     } catch (error) {
       console.error('Failed to delete file', error);
@@ -1332,28 +1333,51 @@ export default function App() {
                   </>
                 )}
                 {rightSidebarTab === 'tags' && (
-                  <div>
-                    {tags.length === 0 ? (
-                      <p className="text-sm text-text-muted">No tags found in vault.</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {tags.map((tagObj, i) => (
-                          <li key={i} className="group">
-                            <button 
-                              className="flex items-center justify-between w-full px-2 py-1.5 hover:bg-interactive-hover rounded"
-                              onClick={() => {
-                                setIsLeftSidebarOpen(true);
-                                setLeftSidebarTab('search');
-                                setSearchQuery(`#${tagObj.tag}`);
-                              }}
-                            >
-                              <span className="text-sm text-interactive-accent font-medium truncate">#{tagObj.tag}</span>
-                              <span className="text-xs text-text-muted bg-bg-primary px-1.5 py-0.5 rounded-full border border-border-color">{tagObj.count}</span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                  <div className="space-y-6">
+                    {(() => {
+                      const currentPath = activeTab?.type === 'editor' ? activeTab.path : null;
+                      const inNote = currentPath
+                        ? tags.filter(t => t.files.includes(currentPath))
+                        : [];
+                      const renderTag = (tagObj: { tag: string; count: number; files: string[] }, i: number) => (
+                        <li key={`${tagObj.tag}-${i}`} className="group">
+                          <button
+                            className="flex items-center justify-between w-full px-2 py-1.5 hover:bg-interactive-hover rounded transition-colors"
+                            onClick={() => {
+                              setIsLeftSidebarOpen(true);
+                              setLeftSidebarTab('search');
+                              setSearchQuery(`#${tagObj.tag}`);
+                            }}
+                            title={`Show all files with #${tagObj.tag}`}
+                          >
+                            <span className="text-sm text-interactive-accent font-medium truncate">#{tagObj.tag}</span>
+                            <span className="text-xs text-text-muted bg-bg-primary px-1.5 py-0.5 rounded-full border border-border-color">{tagObj.count}</span>
+                          </button>
+                        </li>
+                      );
+                      return (
+                        <>
+                          {currentPath && (
+                            <div>
+                              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">In this note</h4>
+                              {inNote.length === 0 ? (
+                                <p className="text-sm text-text-muted">No tags in this note.</p>
+                              ) : (
+                                <ul className="space-y-1">{inNote.map(renderTag)}</ul>
+                              )}
+                            </div>
+                          )}
+                          <div>
+                            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">All tags</h4>
+                            {tags.length === 0 ? (
+                              <p className="text-sm text-text-muted">No tags found in vault.</p>
+                            ) : (
+                              <ul className="space-y-1">{tags.map(renderTag)}</ul>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

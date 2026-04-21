@@ -184,10 +184,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [showTableTools, setShowTableTools] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
-    active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0,
+    active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
   });
 
   const editorRef = useRef<Editor | null>(null);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
@@ -262,7 +263,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
       if (!view) return;
       view.dispatch(view.state.tr.replaceWith(s.from, s.to, view.state.schema.text(`[[${filename}]]`)));
-      setSuggestions(p => ({ ...p, active: false }));
+      setSuggestions({ active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null });
       view.focus();
     } catch (err) { console.error('[insertWikilink]', err); }
   }, []);
@@ -504,18 +505,35 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       )}
 
       {/* Editor + wikilink dropdown */}
-      <div className="flex-grow min-w-0 overflow-auto custom-scrollbar relative">
-        {suggestions.active && (
-          <div className="jn-wikilink-dropdown">
-            {suggestions.suggestions.map((s, i) => (
-              <div key={s}
-                className={`jn-wikilink-option${i === suggestions.selectedIndex ? ' selected' : ''}`}
-                onMouseDown={e => { e.preventDefault(); insertWikilink(s); }}>
-                📄 {s}
-              </div>
-            ))}
-          </div>
-        )}
+      <div ref={editorContainerRef} className="flex-grow min-w-0 overflow-auto custom-scrollbar relative">
+        {suggestions.active && suggestions.suggestions.length > 0 && (() => {
+          // Position the dropdown just below the current cursor.
+          // suggestions.coords is in viewport coords; subtract the container's
+          // top-left (plus its scroll offset) to get coords inside the scroll container.
+          const container = editorContainerRef.current;
+          let style: React.CSSProperties = { top: 8, left: 20 };
+          if (container && suggestions.coords) {
+            const rect = container.getBoundingClientRect();
+            const left = Math.max(8, suggestions.coords.left - rect.left + container.scrollLeft);
+            const top = suggestions.coords.bottom - rect.top + container.scrollTop + 4;
+            const maxLeft = Math.max(8, container.clientWidth - 260);
+            style = { top, left: Math.min(left, maxLeft) };
+          }
+          return (
+            <div className="jn-wikilink-dropdown" style={style} role="listbox">
+              {suggestions.suggestions.map((s, i) => (
+                <div key={s}
+                  role="option"
+                  aria-selected={i === suggestions.selectedIndex}
+                  className={`jn-wikilink-option${i === suggestions.selectedIndex ? ' selected' : ''}`}
+                  onMouseDown={e => { e.preventDefault(); insertWikilink(s); }}>
+                  <span className="jn-wikilink-option-icon">📄</span>
+                  <span className="jn-wikilink-option-label">{s}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         <div className="milkdown-wrapper h-full">
           <MilkdownProvider>
             <InnerMilkdown

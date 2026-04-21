@@ -20,7 +20,8 @@ export const tagDecoratorPlugin = $prose(() => {
     props: {
       decorations(state) {
         const decos: Decoration[] = [];
-        const TAG_RE = /(^|\s)(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
+        // Match tags after start-of-string, whitespace, or any non-word/non-# punctuation
+        const TAG_RE = /(^|[^\w#])(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
         state.doc.descendants((node, pos) => {
           if (!node.isText) return;
           const text = node.text ?? '';
@@ -43,11 +44,16 @@ let _fileList: string[] = [];
 export function setWikilinkFileList(files: string[]) { _fileList = files; }
 
 export interface WikilinkSuggestion {
-  active: boolean; query: string; from: number; to: number;
-  suggestions: string[]; selectedIndex: number;
+  active: boolean;
+  query: string;
+  from: number;
+  to: number;
+  suggestions: string[];
+  selectedIndex: number;
+  coords: { left: number; bottom: number; top: number } | null;
 }
 const EMPTY_SUG: WikilinkSuggestion = {
-  active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0,
+  active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
 };
 let _sug: WikilinkSuggestion = { ...EMPTY_SUG };
 let _cb: ((s: WikilinkSuggestion) => void) | null = null;
@@ -56,13 +62,14 @@ export function subscribeToWikilinkSuggestions(cb: (s: WikilinkSuggestion) => vo
 export function unsubscribeWikilinkSuggestions() { _cb = null; }
 function notifySug(s: WikilinkSuggestion) { _sug = s; _cb?.(s); }
 
+// Minimum characters typed after `[[` before the dropdown appears
+const MIN_AUTOCOMPLETE_CHARS = 2;
+
 export const wikilinkPlugin = $prose(() => {
   const key = new PluginKey('jn-wikilinks');
 
-  // Regex to find [[target]] in a text node
-  const LINK_RE = /\[\[([^\]]*)\]\]/g;
+  const LINK_RE = /\[\[([^\]\n]*)\]\]/g;
 
-  // Given a ProseMirror position, find the wikilink target under the cursor
   function getWikilinkAtPos(state: any, pos: number): string | null {
     const $pos = state.doc.resolve(pos);
     const node = $pos.parent;
@@ -78,10 +85,23 @@ export const wikilinkPlugin = $prose(() => {
     return null;
   }
 
+  function isCursorInsideCompletedLink(state: any, pos: number): boolean {
+    const $pos = state.doc.resolve(pos);
+    const text = $pos.parent.textContent;
+    const offset = $pos.parentOffset;
+    let match;
+    LINK_RE.lastIndex = 0;
+    while ((match = LINK_RE.exec(text)) !== null) {
+      if (match.index <= offset && offset <= match.index + match[0].length) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   return new Plugin({
     key,
     props: {
-      // Decorate [[wikilinks]] inline
       decorations(state) {
         const decos: Decoration[] = [];
         state.doc.descendants((node, pos) => {
@@ -99,7 +119,7 @@ export const wikilinkPlugin = $prose(() => {
         return DecorationSet.create(state.doc, decos);
       },
 
-      // Intercept dblclick inside ProseMirror to navigate wikilinks
+      // Double-click opens the file; single click is untouched (just moves cursor).
       handleDOMEvents: {
         dblclick(view, event) {
           const coords = { left: (event as MouseEvent).clientX, top: (event as MouseEvent).clientY };
@@ -107,34 +127,86 @@ export const wikilinkPlugin = $prose(() => {
           if (!pos) return false;
           const target = getWikilinkAtPos(view.state, pos.pos);
           if (target && _onOpenFile) {
+            event.preventDefault();
             _onOpenFile(target.endsWith('.md') ? target : `${target}.md`);
-            return true; // handled
+            return true;
           }
           return false;
         },
       },
     },
 
-    // Track cursor position to show/hide autocomplete dropdown
     view() {
       return {
         update(view) {
-          const { from } = view.state.selection;
+          const { from, to } = view.state.selection;
+
+          if (from !== to) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
+          }
+
+          // Suppress autocomplete when cursor is inside a completed [[...]] link
+          if (isCursorInsideCompletedLink(view.state, from)) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
+          }
+
           const $pos = view.state.doc.resolve(from);
           const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
           const idx = textBefore.lastIndexOf('[[');
-          if (idx !== -1) {
-            const partial = textBefore.slice(idx + 2);
-            if (!partial.includes(']]') && !partial.includes('\n')) {
-              const docFrom = from - partial.length - 2;
-              const q = partial.toLowerCase();
-              const suggestions = _fileList.filter(f => f.toLowerCase().includes(q)).slice(0, 10);
-              const selectedIndex = Math.min(_sug.selectedIndex, Math.max(0, suggestions.length - 1));
-              notifySug({ active: suggestions.length > 0, query: partial, from: docFrom, to: from, suggestions, selectedIndex });
-              return;
-            }
+
+          if (idx === -1) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
           }
-          if (_sug.active) notifySug({ ..._sug, active: false });
+
+          const partial = textBefore.slice(idx + 2);
+
+          if (partial.includes(']]') || partial.includes('\n')) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
+          }
+
+          // Require at least MIN_AUTOCOMPLETE_CHARS typed after `[[`
+          if (partial.length < MIN_AUTOCOMPLETE_CHARS) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
+          }
+
+          const docFrom = from - partial.length - 2;
+          const q = partial.toLowerCase();
+          const suggestions = _fileList
+            .filter(f => f.toLowerCase().includes(q))
+            .slice(0, 10);
+
+          if (suggestions.length === 0) {
+            if (_sug.active) notifySug({ ...EMPTY_SUG });
+            return;
+          }
+
+          let coords: { left: number; bottom: number; top: number } | null = null;
+          try {
+            const c = view.coordsAtPos(from);
+            coords = { left: c.left, bottom: c.bottom, top: c.top };
+          } catch (_) {
+            coords = null;
+          }
+
+          const selectedIndex = Math.min(
+            _sug.selectedIndex,
+            Math.max(0, suggestions.length - 1),
+          );
+
+          notifySug({
+            active: true,
+            query: partial,
+            from: docFrom,
+            to: from,
+            suggestions,
+            selectedIndex,
+            coords,
+          });
         },
         destroy() { notifySug({ ...EMPTY_SUG }); },
       };
@@ -177,8 +249,6 @@ export function execLiftBlockquote(view: any): boolean {
 }
 
 // ─── Checklist: convert current/selected lines to GFM task list items ─────────
-// GFM task items are: bullet_list > list_item[checked=false/true] > paragraph
-// We create the node structure directly instead of relying on text input rules.
 
 export function execInsertChecklist(view: any): boolean {
   const { state, dispatch } = view;
@@ -191,7 +261,6 @@ export function execInsertChecklist(view: any): boolean {
 
   if (!bulletListType || !listItemType || !paragraphType) return false;
 
-  // Collect all top-level text blocks in the selection
   const blocks: { from: number; to: number; text: string }[] = [];
   state.doc.nodesBetween(from, to, (node: any, pos: number) => {
     if (node.isTextblock) {
@@ -202,7 +271,6 @@ export function execInsertChecklist(view: any): boolean {
   });
 
   if (blocks.length === 0) {
-    // Nothing selected — insert a fresh task item at cursor
     const $from = state.doc.resolve(from);
     const blockStart = $from.start($from.depth);
     const blockEnd = $from.end($from.depth);
@@ -215,12 +283,8 @@ export function execInsertChecklist(view: any): boolean {
     return true;
   }
 
-  // Multiple blocks: replace each with a task list item, combine into one list
   let tr = state.tr;
-  // Work backwards so positions don't shift
   const reversed = [...blocks].reverse();
-  let firstListStart = -1;
-  let firstListEnd = -1;
 
   for (const block of reversed) {
     const para = paragraphType.createChecked(null, schema.text(block.text) as any);
@@ -229,15 +293,11 @@ export function execInsertChecklist(view: any): boolean {
     tr = tr.replaceWith(block.from, block.to, list);
   }
 
-  // After insertion, try to join adjacent list nodes
   dispatch(tr.scrollIntoView());
 
-  // Join adjacent bullet lists in a follow-up dispatch
   requestAnimationFrame(() => {
     try {
       const { state: newState, dispatch: newDispatch } = view;
-      const { joinBackward } = require('prosemirror-commands');
-      // Use transform to merge adjacent lists
       let mergedTr = newState.tr;
       let changed = false;
       newState.doc.nodesBetween(from, Math.min(newState.doc.content.size, to + 100), (node: any, pos: number) => {

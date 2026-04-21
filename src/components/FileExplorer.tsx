@@ -296,6 +296,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
           });
           if (res.ok) {
             fetchFiles();
+            window.dispatchEvent(new CustomEvent('file-saved'));
           } else {
             try {
               const data = await res.json();
@@ -331,6 +332,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
       });
       if (res.ok) {
         fetchFiles();
+        window.dispatchEvent(new CustomEvent('file-saved'));
       } else {
         try {
           const data = await res.json();
@@ -371,6 +373,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
           });
           if (res.ok) {
             fetchFiles();
+            window.dispatchEvent(new CustomEvent('file-saved'));
           } else {
             try {
               const data = await res.json();

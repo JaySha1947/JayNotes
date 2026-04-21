@@ -1208,10 +1208,20 @@ app.get('/api/graph', authHeaderOnly, (req: any, res) => {
 
 app.get('/api/search', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  const query = ((req.query.q as string) || '').toLowerCase();
+  const rawQuery = ((req.query.q as string) || '').trim();
+  const query = rawQuery.toLowerCase();
 
   const results: any[] = [];
   const recentFiles: any[] = [];
+
+  // If query starts with `#`, treat as a tag query and match the whole tag word.
+  // Example: `#tag` matches `#tag` but NOT `#tagging`.
+  let tagMatcher: RegExp | null = null;
+  if (rawQuery.startsWith('#') && rawQuery.length > 1) {
+    const tagName = rawQuery.slice(1).toLowerCase();
+    const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    tagMatcher = new RegExp(`(?:^|[^\\w#])#${escaped}(?![\\w-])`, 'i');
+  }
 
   function scanDir(dir: string, relativePath = '') {
     const files = fs.readdirSync(dir);
@@ -1226,8 +1236,36 @@ app.get('/api/search', authHeaderOnly, (req: any, res) => {
       const content = fs.readFileSync(fullPath, 'utf-8');
       recentFiles.push({ path: relPath, mtime: stat.mtimeMs });
       if (!query) continue;
-      if (file.toLowerCase().includes(query) || content.toLowerCase().includes(query)) {
-        results.push({ path: relPath, content: file });
+
+      if (tagMatcher) {
+        const lines = content.split('\n');
+        let found = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (tagMatcher.test(lines[i])) { found = i; break; }
+        }
+        if (found >= 0) {
+          results.push({
+            path: relPath,
+            content: lines[found].trim().slice(0, 160),
+            line: found + 1,
+          });
+        }
+      } else {
+        if (file.toLowerCase().includes(query)) {
+          results.push({ path: relPath, content: file, line: 1 });
+          continue;
+        }
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().includes(query)) {
+            results.push({
+              path: relPath,
+              content: lines[i].trim().slice(0, 160),
+              line: i + 1,
+            });
+            break;
+          }
+        }
       }
     }
   }
@@ -1235,7 +1273,7 @@ app.get('/api/search', authHeaderOnly, (req: any, res) => {
 
   if (!query) {
     recentFiles.sort((a, b) => b.mtime - a.mtime);
-    res.json(recentFiles.slice(0, 10).map((f) => ({ path: f.path, content: 'Recent' })));
+    res.json(recentFiles.slice(0, 10).map((f) => ({ path: f.path, content: 'Recent', line: 1 })));
   } else {
     res.json(results);
   }
@@ -1257,7 +1295,9 @@ app.get('/api/tags', authHeaderOnly, (req: any, res) => {
       if (!file.endsWith('.md')) continue;
 
       const content = fs.readFileSync(fullPath, 'utf-8');
-      const tagRegex = /(?:^|\s)#([a-zA-Z0-9_-]+)/g;
+      // Match #tag after start-of-string, whitespace, or non-word/non-# punctuation.
+      // Tag must start with a letter; allow letters/digits/underscore/hyphen after.
+      const tagRegex = /(?:^|[^\w#])#([a-zA-Z][a-zA-Z0-9_-]*)/g;
       let match;
       while ((match = tagRegex.exec(content)) !== null) {
         const tag = match[1].toLowerCase();
@@ -1269,9 +1309,10 @@ app.get('/api/tags', authHeaderOnly, (req: any, res) => {
     }
   }
   scanDir(vaultPath);
-  res.json(Array.from(tagMap.entries()).map(([tag, data]) => ({
-    tag, count: data.count, files: Array.from(data.files),
-  })));
+  const out = Array.from(tagMap.entries())
+    .map(([tag, data]) => ({ tag, count: data.count, files: Array.from(data.files) }))
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+  res.json(out);
 });
 
 app.get('/api/templates', authHeaderOnly, (req: any, res) => {
