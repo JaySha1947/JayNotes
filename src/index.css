@@ -305,167 +305,284 @@ body {
 .pan-mode .react-flow__pane:active { cursor: grabbing !important; }
 .selection-mode .react-flow__pane { cursor: crosshair; }
 
-/* ── Milkdown editor styles ─────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   MILKDOWN WYSIWYG EDITOR
+   All rules use !important where needed to override Tailwind preflight resets.
+   Tailwind preflight zeroes out: heading font-size/weight, list-style,
+   margins, padding. We must explicitly restore all of them here.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Wrapper container */
 .milkdown-wrapper {
-  padding: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-primary);
+  min-height: 100%;
 }
 
-/* The Milkdown root */
+/* Milkdown root div (class="milkdown") */
 .milkdown-wrapper .milkdown {
   background: var(--bg-primary) !important;
-  color: var(--text-normal) !important;
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  font-size: var(--editor-font-size, 15px);
-  line-height: 1.7;
-  min-height: 100%;
-  outline: none;
   box-shadow: none !important;
   border: none !important;
-}
-
-.milkdown-wrapper .editor {
-  padding: 24px 24px 24px 20px;
-  outline: none;
+  flex: 1;
   min-height: 100%;
-  color: var(--text-normal) !important;
-  caret-color: var(--interactive-accent);
 }
 
-/* Headings */
-.milkdown-wrapper .editor h1,
-.milkdown-wrapper .editor h2,
-.milkdown-wrapper .editor h3,
-.milkdown-wrapper .editor h4,
+/* The contenteditable ProseMirror div (class="editor") */
+.milkdown-wrapper .editor {
+  outline: none !important;
+  min-height: 100%;
+  padding: 20px 28px 60px 20px;
+  color: var(--text-normal) !important;
+  background: var(--bg-primary) !important;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif !important;
+  font-size: var(--editor-font-size, 15px) !important;
+  line-height: 1.4 !important;
+  caret-color: var(--interactive-accent);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Headings — must override Tailwind preflight font-size/weight resets ── */
+
+.milkdown-wrapper .editor h1 {
+  font-size: 2em !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  margin: 0.8em 0 0.3em !important;
+  color: var(--text-normal) !important;
+}
+.milkdown-wrapper .editor h2 {
+  font-size: 1.5em !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+  margin: 0.7em 0 0.3em !important;
+  color: var(--text-normal) !important;
+}
+.milkdown-wrapper .editor h3 {
+  font-size: 1.25em !important;
+  font-weight: 600 !important;
+  line-height: 1.3 !important;
+  margin: 0.6em 0 0.25em !important;
+  color: var(--text-normal) !important;
+}
+.milkdown-wrapper .editor h4 {
+  font-size: 1.1em !important;
+  font-weight: 600 !important;
+  line-height: 1.35 !important;
+  margin: 0.5em 0 0.2em !important;
+  color: var(--text-normal) !important;
+}
 .milkdown-wrapper .editor h5,
 .milkdown-wrapper .editor h6 {
-  color: var(--text-normal);
-  font-weight: 700;
-  margin: 1.2em 0 0.4em;
-  line-height: 1.3;
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+  margin: 0.5em 0 0.2em !important;
+  color: var(--text-muted) !important;
 }
-.milkdown-wrapper .editor h1 { font-size: 1.8em; }
-.milkdown-wrapper .editor h2 { font-size: 1.45em; }
-.milkdown-wrapper .editor h3 { font-size: 1.2em; }
 
-/* Paragraph */
+/* ── Paragraph ───────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor p {
-  margin: 0.5em 0;
-  color: var(--text-normal);
+  margin: 0 0 2px !important;
+  color: var(--text-normal) !important;
+  line-height: 1.4 !important;
 }
 
-/* Strong / em / strike */
-.milkdown-wrapper .editor strong { font-weight: 700; color: var(--text-normal); }
-.milkdown-wrapper .editor em { font-style: italic; color: var(--text-normal); }
-.milkdown-wrapper .editor s { text-decoration: line-through; color: var(--text-muted); }
+/* ── Inline formatting ───────────────────────────────────────────────────── */
 
-/* Links */
+.milkdown-wrapper .editor strong,
+.milkdown-wrapper .editor b {
+  font-weight: 700 !important;
+  color: var(--text-normal) !important;
+}
+.milkdown-wrapper .editor em,
+.milkdown-wrapper .editor i {
+  font-style: italic !important;
+  color: var(--text-normal) !important;
+}
+.milkdown-wrapper .editor s,
+.milkdown-wrapper .editor del {
+  text-decoration: line-through !important;
+  color: var(--text-muted) !important;
+}
 .milkdown-wrapper .editor a {
-  color: var(--interactive-accent);
-  text-decoration: underline;
+  color: var(--interactive-accent) !important;
+  text-decoration: underline !important;
+  cursor: pointer !important;
 }
 
-/* Inline code */
+/* ── Inline code ─────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor code {
-  background: rgba(0,200,130,0.1);
-  color: var(--interactive-accent);
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-family: 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.88em;
+  font-family: 'Fira Code', 'Cascadia Code', 'Courier New', monospace !important;
+  font-size: 0.88em !important;
+  background: rgba(0, 200, 130, 0.1) !important;
+  color: var(--interactive-accent) !important;
+  border-radius: 4px !important;
+  padding: 1px 5px !important;
 }
 
-/* Code blocks */
+/* ── Code blocks ─────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor pre {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 12px 16px;
-  overflow-x: auto;
-  margin: 1em 0;
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px !important;
+  padding: 12px 16px !important;
+  margin: 4px 0 6px !important;
+  overflow-x: auto !important;
 }
 .milkdown-wrapper .editor pre code {
-  background: none;
-  padding: 0;
-  color: var(--text-normal);
+  background: none !important;
+  padding: 0 !important;
+  color: var(--text-normal) !important;
+  font-size: 0.9em !important;
 }
 
-/* Blockquote */
+/* ── Blockquote ──────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor blockquote {
-  border-left: 3px solid var(--interactive-accent);
-  margin: 1em 0;
-  padding: 4px 0 4px 16px;
-  color: var(--text-muted);
-  font-style: italic;
+  border-left: 3px solid var(--interactive-accent) !important;
+  margin: 4px 0 6px !important;
+  padding: 2px 0 2px 14px !important;
+  color: var(--text-muted) !important;
+  font-style: italic !important;
+}
+.milkdown-wrapper .editor blockquote p {
+  margin: 0 !important;
 }
 
-/* Lists */
-.milkdown-wrapper .editor ul,
+/* ── Lists — must override Tailwind preflight list-style:none reset ───────
+   Also restore left padding since preflight sets padding:0 on everything    */
+
+.milkdown-wrapper .editor ul {
+  list-style: disc !important;
+  padding-left: 1.6em !important;
+  margin: 2px 0 4px !important;
+}
 .milkdown-wrapper .editor ol {
-  padding-left: 1.6em;
-  margin: 0.5em 0;
+  list-style: decimal !important;
+  padding-left: 1.6em !important;
+  margin: 2px 0 4px !important;
 }
 .milkdown-wrapper .editor li {
-  margin: 0.2em 0;
-  color: var(--text-normal);
+  margin: 1px 0 !important;
+  color: var(--text-normal) !important;
+  line-height: 1.4 !important;
 }
-.milkdown-wrapper .editor ul li::marker { color: var(--interactive-accent); opacity: 0.75; }
-.milkdown-wrapper .editor ol li::marker { color: var(--interactive-accent); opacity: 0.75; }
+.milkdown-wrapper .editor ul li::marker {
+  color: var(--interactive-accent) !important;
+}
+.milkdown-wrapper .editor ol li::marker {
+  color: var(--interactive-accent) !important;
+}
 
-/* Task / checklist items */
-.milkdown-wrapper .editor li[data-task-list-item] { list-style: none; }
+/* Nested lists */
+.milkdown-wrapper .editor ul ul,
+.milkdown-wrapper .editor ol ul {
+  list-style: circle !important;
+  margin: 1px 0 !important;
+}
+.milkdown-wrapper .editor ul ul ul,
+.milkdown-wrapper .editor ol ol ul {
+  list-style: square !important;
+}
+.milkdown-wrapper .editor ol ol {
+  list-style: lower-alpha !important;
+  margin: 1px 0 !important;
+}
+
+/* ── Task / checklist items ──────────────────────────────────────────────── */
+
+.milkdown-wrapper .editor li[data-task-list-item] {
+  list-style: none !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 6px !important;
+}
 .milkdown-wrapper .editor input[type="checkbox"] {
-  accent-color: var(--interactive-accent);
-  margin-right: 6px;
+  accent-color: var(--interactive-accent) !important;
+  margin-top: 3px !important;
+  flex-shrink: 0 !important;
 }
 
-/* HR */
+/* ── Horizontal rule ─────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor hr {
-  border: none;
-  border-top: 1px solid var(--border-color);
-  margin: 1.5em 0;
+  border: none !important;
+  border-top: 1px solid var(--border-color) !important;
+  margin: 8px 0 !important;
 }
 
-/* Images — always full width constraint */
+/* ── Images ──────────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor img {
-  max-width: 100%;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  display: block;
-  margin: 8px 0;
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--border-color) !important;
+  display: block !important;
+  margin: 6px 0 !important;
 }
 
-/* Table */
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1em 0;
+  border-collapse: collapse !important;
+  width: 100% !important;
+  margin: 6px 0 !important;
+  font-size: 0.95em !important;
 }
 .milkdown-wrapper .editor th,
 .milkdown-wrapper .editor td {
-  border: 1px solid var(--border-color);
-  padding: 6px 12px;
-  color: var(--text-normal);
+  border: 1px solid var(--border-color) !important;
+  padding: 5px 10px !important;
+  color: var(--text-normal) !important;
+  text-align: left !important;
 }
 .milkdown-wrapper .editor th {
-  background: var(--bg-secondary);
-  font-weight: 600;
+  background: var(--bg-secondary) !important;
+  font-weight: 600 !important;
+}
+.milkdown-wrapper .editor tr:nth-child(even) td {
+  background: rgba(255,255,255,0.02) !important;
 }
 
-/* Selection highlight */
+/* ── Selection ───────────────────────────────────────────────────────────── */
+
 .milkdown-wrapper .editor ::selection {
-  background: rgba(0, 200, 130, 0.25);
+  background: rgba(0, 200, 130, 0.25) !important;
 }
 
-/* Milkdown default theme overrides — kill any white-background from nord theme */
-.milkdown-wrapper .milkdown-menu { display: none !important; }
+/* ── ProseMirror placeholder ─────────────────────────────────────────────── */
 
-/* ProseMirror placeholder */
-.milkdown-wrapper .editor .ProseMirror-focused:not(:has(*)) > p:first-child::before,
-.milkdown-wrapper .editor p.is-empty::before {
+.milkdown-wrapper .editor .ProseMirror > p:first-child:only-child:empty::before {
   content: 'Start writing…';
   color: var(--text-muted);
   pointer-events: none;
-  position: absolute;
+}
+
+/* ── Hide Milkdown's built-in menu bar (we use our own toolbar) ──────────── */
+.milkdown-wrapper .milkdown-menu,
+.milkdown-wrapper [data-milkdown-menu] {
+  display: none !important;
+}
+
+/* ── ProseMirror selected node highlight ─────────────────────────────────── */
+.milkdown-wrapper .editor .ProseMirror-selectednode {
+  outline: 2px solid var(--interactive-accent) !important;
+  outline-offset: 2px !important;
+  border-radius: 2px !important;
+}
+
+/* ── Milkdown tooltip / slash menu (if enabled) ──────────────────────────── */
+.milkdown-wrapper .milkdown-tooltip,
+.milkdown-wrapper [data-milkdown-slash] {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px !important;
+  color: var(--text-normal) !important;
 }

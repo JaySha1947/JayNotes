@@ -39,6 +39,7 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { trailing } from '@milkdown/plugin-trailing';
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 import { callCommand } from '@milkdown/utils';
+import { editorViewCtx } from '@milkdown/core';
 import {
   Bookmark, FileText, ClipboardList,
   Bold, Italic, Strikethrough, List, ListOrdered,
@@ -254,10 +255,18 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
   }, []);
 
   // ── Toolbar command helper ─────────────────────────────────────────────────
+  // Toolbar clicks steal focus away from ProseMirror, so we refocus the view
+  // before dispatching any command — otherwise setBlockType etc. silently fail.
   const cmd = useCallback((command: any, payload?: any) => {
     const inst = editorRef.current;
     if (!inst) return;
-    inst.action(callCommand(command, payload));
+    try {
+      const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
+      if (view && !view.hasFocus()) view.focus();
+    } catch (_) {}
+    requestAnimationFrame(() => {
+      inst.action(callCommand(command, payload));
+    });
   }, []);
 
   // ── Template insertion ─────────────────────────────────────────────────────
