@@ -586,3 +586,95 @@ body {
   border-radius: 6px !important;
   color: var(--text-normal) !important;
 }
+
+/* ── JayNotes wikilink & tag decorations ────────────────────────────────── */
+
+/* [[wikilink]] highlight */
+.jn-wikilink {
+  color: var(--interactive-accent) !important;
+  text-decoration: underline !important;
+  text-decoration-style: dotted !important;
+  cursor: pointer !important;
+  border-radius: 2px;
+}
+.jn-wikilink:hover {
+  background: rgba(0, 200, 130, 0.12) !important;
+}
+
+/* #tag highlight */
+.jn-tag {
+  color: var(--interactive-accent) !important;
+  background: rgba(0, 200, 130, 0.13) !important;
+  border-radius: 10px !important;
+  padding: 1px 6px !important;
+  font-size: 0.88em !important;
+}
+
+/* Wikilink autocomplete dropdown */
+.jn-wikilink-dropdown {
+  position: absolute;
+  top: 8px;
+  left: 20px;
+  z-index: 100;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  min-width: 220px;
+  max-width: 360px;
+  overflow: hidden;
+}
+.jn-wikilink-option {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--text-normal);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jn-wikilink-option:hover,
+.jn-wikilink-option.selected {
+  background: rgba(0, 200, 130, 0.15);
+  color: var(--interactive-accent);
+}
+
+/* ── Prosemirror-tables interaction styles ──────────────────────────────── */
+
+/* Selected cell */
+.milkdown-wrapper .editor .selectedCell::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0; bottom: 0;
+  background: rgba(0, 200, 130, 0.15) !important;
+  pointer-events: none;
+  z-index: 1;
+}
+.milkdown-wrapper .editor td,
+.milkdown-wrapper .editor th {
+  position: relative !important;
+}
+
+/* Column resize handle */
+.milkdown-wrapper .editor .column-resize-handle {
+  position: absolute !important;
+  right: -2px !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 4px !important;
+  background: var(--interactive-accent) !important;
+  opacity: 0 !important;
+  cursor: col-resize !important;
+  transition: opacity 0.15s !important;
+  z-index: 20 !important;
+}
+.milkdown-wrapper .editor table:hover .column-resize-handle,
+.milkdown-wrapper .editor .column-resize-handle:hover {
+  opacity: 0.6 !important;
+}
+
+/* Table cursor during resize */
+.milkdown-wrapper.resize-cursor,
+.milkdown-wrapper.resize-cursor * {
+  cursor: col-resize !important;
+}
