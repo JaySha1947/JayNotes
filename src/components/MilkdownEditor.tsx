@@ -1,44 +1,18 @@
 /**
  * MilkdownEditor.tsx — Milkdown 7 WYSIWYG editor for JayNotes
- *
- * Issues fixed in this revision:
- *  1. Checklist works via "- [ ] " input rule (type in editor)
- *  2. #tags highlighted via custom ProseMirror decorator
- *  3. [[wikilink]] autocomplete dropdown with keyboard nav
- *  4. [[wikilink]] highlighted + double-click navigates to file
- *  5. Backlinks/forwardlinks still driven by saved markdown (server reads [[]])
- *  6. Code block toggle is reversible (turnIntoTextCommand)
- *  7. Font reset button works
- *  8. Table is interactive (columnResizingPlugin + tableEditingPlugin from GFM)
- *  9. Multi-line list: wraps all selected paragraphs, toggle removes markers
  */
-
-import React, {
-  useEffect, useRef, useState, useCallback,
-} from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/core';
 import {
   commonmark,
-  toggleStrongCommand,
-  toggleEmphasisCommand,
-  toggleInlineCodeCommand,
-  wrapInBulletListCommand,
-  wrapInOrderedListCommand,
-  wrapInBlockquoteCommand,
-  wrapInHeadingCommand,
-  insertHrCommand,
-  turnIntoTextCommand,
-  liftListItemCommand,
-  bulletListSchema,
-  orderedListSchema,
-  listItemSchema,
+  toggleStrongCommand, toggleEmphasisCommand, toggleInlineCodeCommand,
+  wrapInBulletListCommand, wrapInOrderedListCommand,
+  wrapInBlockquoteCommand, wrapInHeadingCommand,
+  insertHrCommand, turnIntoTextCommand,
 } from '@milkdown/preset-commonmark';
 import {
-  gfm,
-  toggleStrikethroughCommand,
-  insertTableCommand,
-  columnResizingPlugin,
-  tableEditingPlugin,
+  gfm, toggleStrikethroughCommand, insertTableCommand,
+  columnResizingPlugin, tableEditingPlugin,
 } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { upload, uploadConfig } from '@milkdown/plugin-upload';
@@ -53,11 +27,9 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
-  tagDecoratorPlugin,
-  wikilinkPlugin,
-  setWikilinkFileList,
-  subscribeToWikilinkSuggestions,
-  unsubscribeWikilinkSuggestions,
+  tagDecoratorPlugin, wikilinkPlugin, taskListNodeViewPlugin,
+  setWikilinkFileList, subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
+  execWrapInList, execLiftBlockquote,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 
@@ -75,17 +47,14 @@ interface MilkdownEditorProps {
 // ─── Image upload ─────────────────────────────────────────────────────────────
 
 async function uploadImageToServer(file: File): Promise<string> {
-  const safeName =
-    file.name === 'image.png' ? `pasted-image-${Date.now()}.png` : file.name;
+  const safeName = file.name === 'image.png' ? `pasted-image-${Date.now()}.png` : file.name;
   const formData = new FormData();
   formData.append('file', new File([file], safeName, { type: file.type }));
   const token = localStorage.getItem('jays_notes_token');
   const res = await fetch('/api/upload', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: formData,
+    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
   });
-  if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   const data = await res.json();
   if (!data.path) throw new Error('No path');
   return `/api/${data.path}?token=${encodeURIComponent(token ?? '')}`;
@@ -105,9 +74,7 @@ interface InnerProps {
   onReady: () => void;
 }
 
-const InnerMilkdown: React.FC<InnerProps> = ({
-  initialContent, editorRef, onMarkdownChange, onReady,
-}) => {
+const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMarkdownChange, onReady }) => {
   const onChangeRef = useRef(onMarkdownChange);
   onChangeRef.current = onMarkdownChange;
   const onReadyRef = useRef(onReady);
@@ -143,7 +110,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({
       .use(upload)
       .use(trailing)
       .use(tagDecoratorPlugin)
-      .use(wikilinkPlugin),
+      .use(wikilinkPlugin)
+      .use(taskListNodeViewPlugin),
     []
   );
 
@@ -160,8 +128,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({
 // ─── Toolbar button ───────────────────────────────────────────────────────────
 
 const ToolBtn: React.FC<{
-  title: string; onClick: () => void;
-  children: React.ReactNode; style?: React.CSSProperties;
+  title: string; onClick: () => void; children: React.ReactNode; style?: React.CSSProperties;
 }> = ({ title, onClick, children, style }) => (
   <button className="format-toolbar-btn" title={title} onClick={onClick} style={style}>
     {children}
@@ -186,15 +153,14 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
-  const suggestionsRef = useRef(suggestions);
-  suggestionsRef.current = suggestions;
+  const sugRef = useRef(suggestions);
+  sugRef.current = suggestions;
 
   // ── Font size ──────────────────────────────────────────────────────────────
   useEffect(() => {
     document.documentElement.style.setProperty('--editor-font-size', `${fontSize}px`);
   }, [fontSize]);
 
-  // ── Ctrl +/- /0 ───────────────────────────────────────────────────────────
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return;
@@ -206,81 +172,61 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  // ── Load files list for wikilink autocomplete ──────────────────────────────
+  // ── Load file list for wikilink autocomplete ───────────────────────────────
   useEffect(() => {
-    apiFetch('/api/files')
-      .then(r => r.json())
-      .then(data => {
-        const flat: string[] = [];
-        const walk = (nodes: any[]) => {
-          for (const n of nodes) {
-            if (n.type === 'file') flat.push(n.name.replace(/\.md$/, ''));
-            if (n.children) walk(n.children);
-          }
-        };
-        walk(data);
-        setWikilinkFileList(flat);
-      })
-      .catch(() => {});
+    apiFetch('/api/files').then(r => r.json()).then(data => {
+      const flat: string[] = [];
+      const walk = (nodes: any[]) => {
+        for (const n of nodes) {
+          if (n.type === 'file') flat.push(n.name.replace(/\.md$/, ''));
+          if (n.children) walk(n.children);
+        }
+      };
+      walk(data);
+      setWikilinkFileList(flat);
+    }).catch(() => {});
   }, []);
 
-  // ── Subscribe to wikilink suggestion changes ───────────────────────────────
+  // ── Wikilink suggestion subscription ──────────────────────────────────────
   useEffect(() => {
-    subscribeToWikilinkSuggestions(setSuggestions);
+    subscribeToWikilinkSuggestions(s => setSuggestions({ ...s }));
     return () => unsubscribeWikilinkSuggestions();
   }, []);
 
   // ── Keyboard nav for wikilink dropdown ────────────────────────────────────
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      const s = suggestionsRef.current;
+      const s = sugRef.current;
       if (!s.active) return;
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSuggestions(prev => ({ ...prev, selectedIndex: Math.min(prev.selectedIndex + 1, prev.suggestions.length - 1) }));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSuggestions(prev => ({ ...prev, selectedIndex: Math.max(prev.selectedIndex - 1, 0) }));
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        if (s.suggestions[s.selectedIndex]) {
-          e.preventDefault();
-          insertWikilink(s.suggestions[s.selectedIndex]);
-        }
-      } else if (e.key === 'Escape') {
-        setSuggestions(prev => ({ ...prev, active: false }));
-      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSuggestions(p => ({ ...p, selectedIndex: Math.min(p.selectedIndex + 1, p.suggestions.length - 1) })); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setSuggestions(p => ({ ...p, selectedIndex: Math.max(p.selectedIndex - 1, 0) })); }
+      else if ((e.key === 'Enter' || e.key === 'Tab') && s.suggestions[s.selectedIndex]) { e.preventDefault(); insertWikilink(s.suggestions[s.selectedIndex]); }
+      else if (e.key === 'Escape') { setSuggestions(p => ({ ...p, active: false })); }
     };
     window.addEventListener('keydown', h, true);
     return () => window.removeEventListener('keydown', h, true);
   }, []);
 
-  // ── Insert chosen wikilink ─────────────────────────────────────────────────
   const insertWikilink = useCallback((filename: string) => {
     const inst = editorRef.current;
     if (!inst) return;
-    const s = suggestionsRef.current;
+    const s = sugRef.current;
     const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
     if (!view) return;
-    // Replace from [[ to cursor with [[filename]]
-    const { tr, doc } = view.state;
-    // s.from points to the [[ character position
-    const replacement = `[[${filename}]]`;
-    view.dispatch(
-      tr.replaceWith(s.from, s.to, view.state.schema.text(replacement))
-    );
-    setSuggestions(prev => ({ ...prev, active: false }));
+    const { tr } = view.state;
+    view.dispatch(tr.replaceWith(s.from, s.to, view.state.schema.text(`[[${filename}]]`)));
+    setSuggestions(p => ({ ...p, active: false }));
     view.focus();
   }, []);
 
-  // ── Double-click on wikilink to navigate ──────────────────────────────────
+  // ── Double-click wikilink → navigate ──────────────────────────────────────
   const handleEditorClick = useCallback((e: React.MouseEvent) => {
-    if (e.detail !== 2) return; // only double-click
-    const target = e.target as HTMLElement;
-    const linkEl = target.closest('.jn-wikilink') as HTMLElement | null;
-    if (!linkEl) return;
-    const fileTarget = linkEl.dataset.target;
-    if (fileTarget && onOpenFile) {
-      onOpenFile(fileTarget.endsWith('.md') ? fileTarget : `${fileTarget}.md`);
+    if (e.detail !== 2) return;
+    const el = (e.target as HTMLElement).closest('.jn-wikilink') as HTMLElement | null;
+    if (!el) return;
+    const target = el.dataset.target;
+    if (target && onOpenFile) {
+      onOpenFile(target.endsWith('.md') ? target : `${target}.md`);
     }
   }, [onOpenFile]);
 
@@ -306,72 +252,73 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, content: md }),
-      })
-        .then(() => window.dispatchEvent(new CustomEvent('file-saved')))
+      }).then(() => window.dispatchEvent(new CustomEvent('file-saved')))
         .catch(err => console.error('[save]', err));
     }, 600);
   }, []);
 
-  // ── Toolbar command helper: focus first, then run ─────────────────────────
-  const cmd = useCallback((command: any, payload?: any) => {
+  // ── Get view helper ────────────────────────────────────────────────────────
+  const getView = useCallback(() => {
     const inst = editorRef.current;
-    if (!inst) return;
-    try {
-      const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
-      if (view && !view.hasFocus()) view.focus();
-    } catch (_) {}
+    if (!inst) return null;
+    try { return inst.action((ctx: any) => ctx.get(editorViewCtx)); }
+    catch (_) { return null; }
+  }, []);
+
+  // ── Standard toolbar command (focus then run) ──────────────────────────────
+  const cmd = useCallback((command: any, payload?: any) => {
+    const view = getView();
+    if (view && !view.hasFocus()) view.focus();
     requestAnimationFrame(() => {
       try { editorRef.current?.action(callCommand(command, payload)); }
       catch (err) { console.warn('[cmd]', err); }
     });
-  }, []);
+  }, [getView]);
 
-  // ── Multi-line list: wrap all selected paragraphs ─────────────────────────
-  const cmdMultiList = useCallback((listCommand: any) => {
-    const inst = editorRef.current;
-    if (!inst) return;
-    try {
-      const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
-      if (!view) return;
-      if (!view.hasFocus()) view.focus();
-      requestAnimationFrame(() => {
-        try {
-          const { state, dispatch } = view;
-          const { from, to } = state.selection;
-          // Collect all top-level block positions in selection
-          const positions: number[] = [];
-          state.doc.nodesBetween(from, to, (node, pos) => {
-            if (node.type.name === 'paragraph') positions.push(pos);
-            return true;
-          });
-          if (positions.length <= 1) {
-            // Single block: use standard command
-            inst.action(callCommand(listCommand));
-            return;
-          }
-          // Multiple: wrap each paragraph individually
-          let tr = state.tr;
-          let offset = 0;
-          for (const pos of positions) {
-            const adjustedPos = pos + offset;
-            const node = tr.doc.nodeAt(adjustedPos);
-            if (!node) continue;
-            // Create list_item > paragraph
-            const listItemType = state.schema.nodes.list_item;
-            const listType = listCommand === wrapInBulletListCommand.key
-              ? state.schema.nodes.bullet_list
-              : state.schema.nodes.ordered_list;
-            if (!listItemType || !listType) break;
-            const listItem = listItemType.create(null, node.copy(node.content));
-            const list = listType.create(null, listItem);
-            tr = tr.replaceWith(adjustedPos, adjustedPos + node.nodeSize, list);
-            offset += list.nodeSize - node.nodeSize;
-          }
-          dispatch(tr.scrollIntoView());
-        } catch (err) { console.warn('[multiList]', err); }
-      });
-    } catch (_) {}
-  }, []);
+  // ── List command: uses prosemirror-schema-list.wrapInList ──────────────────
+  // Correctly wraps ALL selected paragraphs into one list with multiple items.
+  const cmdList = useCallback((listType: 'bullet_list' | 'ordered_list') => {
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    requestAnimationFrame(() => {
+      execWrapInList(view, listType);
+    });
+  }, [getView]);
+
+  // ── Checklist: insert "- [ ] " text then let input rule convert it ─────────
+  const cmdChecklist = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    requestAnimationFrame(() => {
+      try {
+        const { state, dispatch } = view;
+        const { from } = state.selection;
+        const line = state.doc.lineAt ? state.doc.lineAt(from) : null;
+        // Insert "- [ ] " at start of current block
+        const $from = state.doc.resolve(from);
+        const blockStart = $from.start($from.depth);
+        const tr = state.tr.insertText('- [ ] ', blockStart, blockStart);
+        dispatch(tr);
+      } catch (err) { console.warn('[checklist]', err); }
+    });
+  }, [getView]);
+
+  // ── Blockquote toggle ──────────────────────────────────────────────────────
+  const cmdBlockquote = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    requestAnimationFrame(() => {
+      // Try to lift out of blockquote first; if not in one, wrap into one
+      const lifted = execLiftBlockquote(view);
+      if (!lifted) {
+        try { editorRef.current?.action(callCommand(wrapInBlockquoteCommand.key)); }
+        catch (_) {}
+      }
+    });
+  }, [getView]);
 
   // ── Template insertion ─────────────────────────────────────────────────────
   const handleApplyTemplate = async (t: { name: string; path: string; type: string }) => {
@@ -380,13 +327,10 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
       if (!res.ok) return;
       let tmpl = await res.text();
       tmpl = tmpl.replace(/{{date}}/g, new Date().toISOString().split('T')[0]);
-      const inst = editorRef.current;
-      if (inst) inst.action(insert('\n\n' + tmpl));
+      editorRef.current?.action(insert('\n\n' + tmpl));
       setIsTemplateMenuOpen(false);
     } catch (err) { console.error('[template]', err); }
   };
-
-  const handleReady = useCallback(() => {}, []);
 
   // ── Empty / loading ────────────────────────────────────────────────────────
   if (!filePath) {
@@ -465,15 +409,15 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
         <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 12 }}>H1</ToolBtn>
         <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 11 }}>H2</ToolBtn>
         <ToolBtn title="Heading 3" onClick={() => cmd(wrapInHeadingCommand.key, 3)} style={{ fontWeight: 700, fontSize: 10 }}>H3</ToolBtn>
-        <ToolBtn title="Plain text (remove heading/list)" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 10 }}>¶</ToolBtn>
+        <ToolBtn title="Plain paragraph (removes block formatting)" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 10 }}>¶</ToolBtn>
         <div className="format-toolbar-separator" />
-        <ToolBtn title="Bullet list (wraps all selected lines)" onClick={() => cmdMultiList(wrapInBulletListCommand.key)}><List size={13} /></ToolBtn>
-        <ToolBtn title="Ordered list (wraps all selected lines)" onClick={() => cmdMultiList(wrapInOrderedListCommand.key)}><ListOrdered size={13} /></ToolBtn>
-        <ToolBtn title="Task list: type '- [ ] ' or '- [x] ' in a bullet" onClick={() => cmd(wrapInBulletListCommand.key)}><CheckSquare size={13} /></ToolBtn>
+        <ToolBtn title="Bullet list — wraps all selected lines" onClick={() => cmdList('bullet_list')}><List size={13} /></ToolBtn>
+        <ToolBtn title="Ordered list — wraps all selected lines; click again to remove" onClick={() => cmdList('ordered_list')}><ListOrdered size={13} /></ToolBtn>
+        <ToolBtn title="Task / checklist item" onClick={cmdChecklist}><CheckSquare size={13} /></ToolBtn>
         <div className="format-toolbar-separator" />
-        <ToolBtn title="Blockquote" onClick={() => cmd(wrapInBlockquoteCommand.key)}><Quote size={13} /></ToolBtn>
+        <ToolBtn title="Blockquote (click again to remove)" onClick={cmdBlockquote}><Quote size={13} /></ToolBtn>
         <ToolBtn title="Horizontal rule" onClick={() => cmd(insertHrCommand.key)}><Minus size={13} /></ToolBtn>
-        <ToolBtn title="Insert table (Tab to move between cells)" onClick={() => cmd(insertTableCommand.key)}><Table size={13} /></ToolBtn>
+        <ToolBtn title="Insert table (Tab=next cell, Shift+Tab=prev)" onClick={() => cmd(insertTableCommand.key)}><Table size={13} /></ToolBtn>
         <div className="format-toolbar-separator" />
         <select title="Font size" value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
           onChange={e => setFontSize(Number(e.target.value))}>
@@ -482,20 +426,18 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
         </select>
         <ToolBtn title="Larger (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 13 }}>A⁺</ToolBtn>
         <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</ToolBtn>
-        <ToolBtn title="Reset to default (Ctrl+0)" onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</ToolBtn>
+        <ToolBtn title="Reset font size (Ctrl+0)" onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</ToolBtn>
       </div>
 
-      {/* Editor + wikilink dropdown */}
+      {/* Editor area */}
       <div className="flex-grow min-w-0 overflow-auto custom-scrollbar relative">
         {/* Wikilink autocomplete dropdown */}
         {suggestions.active && (
           <div className="jn-wikilink-dropdown">
             {suggestions.suggestions.map((s, i) => (
-              <div
-                key={s}
+              <div key={s}
                 className={`jn-wikilink-option${i === suggestions.selectedIndex ? ' selected' : ''}`}
-                onMouseDown={e => { e.preventDefault(); insertWikilink(s); }}
-              >
+                onMouseDown={e => { e.preventDefault(); insertWikilink(s); }}>
                 📄 {s}
               </div>
             ))}
@@ -509,7 +451,7 @@ export const MilkdownEditor: React.FC<MilkdownEditorProps> = ({
               initialContent={content}
               editorRef={editorRef}
               onMarkdownChange={handleMarkdownChange}
-              onReady={handleReady}
+              onReady={useCallback(() => {}, [])}
             />
           </MilkdownProvider>
         </div>
