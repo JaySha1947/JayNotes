@@ -5,7 +5,7 @@ const Panel = PanelOrig as any;
 const PanelResizeHandle = Separator as any;
 import { Settings, Search, Network, FileText, Plus, X, Calendar, Clock, Bookmark, LayoutDashboard, HelpCircle, ArrowLeft, ArrowRight, LogOut, PanelRight, ChevronLeft, ChevronRight, ClipboardList, Layers, Edit3, Trash2, Copy, LayoutGrid, FolderTree, FilePlus2, SquarePlus, Users, User, ShieldAlert, Shield } from 'lucide-react';
 import { FileExplorer } from './components/FileExplorer';
-import { Editor } from './components/Editor';
+import { MilkdownEditor } from './components/MilkdownEditor';
 import { Canvas } from './components/Canvas';
 import { Graph } from './components/Graph';
 import { CommandPalette } from './components/CommandPalette';
@@ -1207,14 +1207,14 @@ export default function App() {
               ) : activeTab.path ? (
                 <PanelGroup direction="horizontal" className="w-full h-full">
                   <Panel id="editor-main" className="h-full">
-                    <Editor 
-                      filePath={activeTab.path} 
-                      onOpenFile={handleSelectFile} 
+                    <MilkdownEditor
+                      filePath={activeTab.path}
+                      onOpenFile={handleSelectFile}
                       isBookmarked={bookmarks.includes(activeTab.path)}
                       onToggleBookmark={() => {
                         if (activeTab.path) {
                           const path = activeTab.path;
-                          setBookmarks(prev => 
+                          setBookmarks(prev =>
                             prev.includes(path) ? prev.filter(b => b !== path) : [...prev, path]
                           );
                         }
@@ -1234,9 +1234,9 @@ export default function App() {
                         >
                           <X size={14} />
                         </button>
-                        <Editor 
-                          filePath={splitTab.path} 
-                          onOpenFile={handleSelectFile} 
+                        <MilkdownEditor
+                          filePath={splitTab.path}
+                          onOpenFile={handleSelectFile}
                         />
                       </Panel>
                     </>

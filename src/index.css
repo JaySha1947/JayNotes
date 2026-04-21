@@ -304,3 +304,168 @@ body {
 .pan-mode .react-flow__pane { cursor: grab !important; }
 .pan-mode .react-flow__pane:active { cursor: grabbing !important; }
 .selection-mode .react-flow__pane { cursor: crosshair; }
+
+/* ── Milkdown editor styles ─────────────────────────────────────────────── */
+
+.milkdown-wrapper {
+  padding: 0;
+  background: var(--bg-primary);
+}
+
+/* The Milkdown root */
+.milkdown-wrapper .milkdown {
+  background: var(--bg-primary) !important;
+  color: var(--text-normal) !important;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--editor-font-size, 15px);
+  line-height: 1.7;
+  min-height: 100%;
+  outline: none;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.milkdown-wrapper .editor {
+  padding: 24px 24px 24px 20px;
+  outline: none;
+  min-height: 100%;
+  color: var(--text-normal) !important;
+  caret-color: var(--interactive-accent);
+}
+
+/* Headings */
+.milkdown-wrapper .editor h1,
+.milkdown-wrapper .editor h2,
+.milkdown-wrapper .editor h3,
+.milkdown-wrapper .editor h4,
+.milkdown-wrapper .editor h5,
+.milkdown-wrapper .editor h6 {
+  color: var(--text-normal);
+  font-weight: 700;
+  margin: 1.2em 0 0.4em;
+  line-height: 1.3;
+}
+.milkdown-wrapper .editor h1 { font-size: 1.8em; }
+.milkdown-wrapper .editor h2 { font-size: 1.45em; }
+.milkdown-wrapper .editor h3 { font-size: 1.2em; }
+
+/* Paragraph */
+.milkdown-wrapper .editor p {
+  margin: 0.5em 0;
+  color: var(--text-normal);
+}
+
+/* Strong / em / strike */
+.milkdown-wrapper .editor strong { font-weight: 700; color: var(--text-normal); }
+.milkdown-wrapper .editor em { font-style: italic; color: var(--text-normal); }
+.milkdown-wrapper .editor s { text-decoration: line-through; color: var(--text-muted); }
+
+/* Links */
+.milkdown-wrapper .editor a {
+  color: var(--interactive-accent);
+  text-decoration: underline;
+}
+
+/* Inline code */
+.milkdown-wrapper .editor code {
+  background: rgba(0,200,130,0.1);
+  color: var(--interactive-accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.88em;
+}
+
+/* Code blocks */
+.milkdown-wrapper .editor pre {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+.milkdown-wrapper .editor pre code {
+  background: none;
+  padding: 0;
+  color: var(--text-normal);
+}
+
+/* Blockquote */
+.milkdown-wrapper .editor blockquote {
+  border-left: 3px solid var(--interactive-accent);
+  margin: 1em 0;
+  padding: 4px 0 4px 16px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Lists */
+.milkdown-wrapper .editor ul,
+.milkdown-wrapper .editor ol {
+  padding-left: 1.6em;
+  margin: 0.5em 0;
+}
+.milkdown-wrapper .editor li {
+  margin: 0.2em 0;
+  color: var(--text-normal);
+}
+.milkdown-wrapper .editor ul li::marker { color: var(--interactive-accent); opacity: 0.75; }
+.milkdown-wrapper .editor ol li::marker { color: var(--interactive-accent); opacity: 0.75; }
+
+/* Task / checklist items */
+.milkdown-wrapper .editor li[data-task-list-item] { list-style: none; }
+.milkdown-wrapper .editor input[type="checkbox"] {
+  accent-color: var(--interactive-accent);
+  margin-right: 6px;
+}
+
+/* HR */
+.milkdown-wrapper .editor hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 1.5em 0;
+}
+
+/* Images — always full width constraint */
+.milkdown-wrapper .editor img {
+  max-width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  display: block;
+  margin: 8px 0;
+}
+
+/* Table */
+.milkdown-wrapper .editor table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.milkdown-wrapper .editor th,
+.milkdown-wrapper .editor td {
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  color: var(--text-normal);
+}
+.milkdown-wrapper .editor th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+/* Selection highlight */
+.milkdown-wrapper .editor ::selection {
+  background: rgba(0, 200, 130, 0.25);
+}
+
+/* Milkdown default theme overrides — kill any white-background from nord theme */
+.milkdown-wrapper .milkdown-menu { display: none !important; }
+
+/* ProseMirror placeholder */
+.milkdown-wrapper .editor .ProseMirror-focused:not(:has(*)) > p:first-child::before,
+.milkdown-wrapper .editor p.is-empty::before {
+  content: 'Start writing…';
+  color: var(--text-muted);
+  pointer-events: none;
+  position: absolute;
+}
