@@ -253,6 +253,8 @@ export default function App() {
 
     const handleFileSaved = () => {
       fetchTags();
+      // Also bump refreshTrigger so links/backlinks panel re-fetches
+      setRefreshTrigger(prev => prev + 1);
     };
 
     window.addEventListener('file-saved', handleFileSaved);

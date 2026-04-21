@@ -1,8 +1,5 @@
 /**
  * MilkdownEditor.tsx — Milkdown 7 WYSIWYG editor for JayNotes
- *
- * Wrapped in an ErrorBoundary so any runtime crash shows a fallback
- * instead of blanking the whole page.
  */
 import React, { useEffect, useRef, useState, useCallback, Component } from 'react';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/core';
@@ -14,7 +11,13 @@ import {
   insertHrCommand, turnIntoTextCommand,
 } from '@milkdown/preset-commonmark';
 import {
-  gfm, toggleStrikethroughCommand, insertTableCommand,
+  gfm,
+  toggleStrikethroughCommand,
+  insertTableCommand,
+  addColAfterCommand, addColBeforeCommand,
+  addRowAfterCommand, addRowBeforeCommand,
+  deleteSelectedCellsCommand,
+  setAlignCommand,
 } from '@milkdown/preset-gfm';
 import { history } from '@milkdown/plugin-history';
 import { upload, uploadConfig } from '@milkdown/plugin-upload';
@@ -26,12 +29,14 @@ import {
   Bookmark, FileText, ClipboardList,
   Bold, Italic, Strikethrough, List, ListOrdered,
   CheckSquare, Code, Quote, Minus, Table, AlertTriangle, RefreshCw,
+  AlignLeft, AlignCenter, AlignRight,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
   tagDecoratorPlugin, wikilinkPlugin,
-  setWikilinkFileList, subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
-  execWrapInList, execLiftBlockquote,
+  setWikilinkFileList, setOpenFileCallback,
+  subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
+  execWrapInList, execLiftBlockquote, execInsertChecklist,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 
@@ -39,34 +44,23 @@ import {
 
 interface EBState { hasError: boolean; error: string }
 class EditorErrorBoundary extends Component<{ children: React.ReactNode; onReset: () => void }, EBState> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false, error: '' };
-  }
-  static getDerivedStateFromError(e: Error) {
-    return { hasError: true, error: e?.message || String(e) };
-  }
-  componentDidCatch(e: Error, info: any) {
-    console.error('[MilkdownEditor] runtime crash:', e, info);
-  }
+  constructor(props: any) { super(props); this.state = { hasError: false, error: '' }; }
+  static getDerivedStateFromError(e: Error) { return { hasError: true, error: e?.message || String(e) }; }
+  componentDidCatch(e: Error, info: any) { console.error('[MilkdownEditor] crash:', e, info); }
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="h-full flex flex-col items-center justify-center gap-4 text-text-muted p-8">
-          <AlertTriangle size={32} className="text-error opacity-60" />
-          <div className="text-center">
-            <p className="font-medium text-text-normal mb-1">Editor failed to load</p>
-            <p className="text-xs opacity-60 font-mono max-w-md break-all">{this.state.error}</p>
-          </div>
-          <button
-            onClick={() => { this.setState({ hasError: false, error: '' }); this.props.onReset(); }}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded border border-border-color hover:border-interactive-accent hover:text-interactive-accent transition-colors"
-          >
-            <RefreshCw size={13} /> Reload editor
-          </button>
+    if (this.state.hasError) return (
+      <div className="h-full flex flex-col items-center justify-center gap-4 text-text-muted p-8">
+        <AlertTriangle size={32} className="text-error opacity-60" />
+        <div className="text-center">
+          <p className="font-medium text-text-normal mb-1">Editor failed to load</p>
+          <p className="text-xs opacity-60 font-mono max-w-md break-all">{this.state.error}</p>
         </div>
-      );
-    }
+        <button onClick={() => { this.setState({ hasError: false, error: '' }); this.props.onReset(); }}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm rounded border border-border-color hover:border-interactive-accent hover:text-interactive-accent transition-colors">
+          <RefreshCw size={13} /> Reload editor
+        </button>
+      </div>
+    );
     return this.props.children;
   }
 }
@@ -103,7 +97,7 @@ async function uploadImageToServer(file: File): Promise<string> {
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
-// ─── Inner editor (inside MilkdownProvider) ───────────────────────────────────
+// ─── Inner editor ─────────────────────────────────────────────────────────────
 
 interface InnerProps {
   initialContent: string;
@@ -155,10 +149,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
   useEffect(() => {
     if (!loading) {
       const inst = get();
-      if (inst) {
-        editorRef.current = inst;
-        onReadyRef.current();
-      }
+      if (inst) { editorRef.current = inst; onReadyRef.current(); }
     }
   }, [loading, get, editorRef]);
 
@@ -168,14 +159,18 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
 // ─── Toolbar button ───────────────────────────────────────────────────────────
 
 const ToolBtn: React.FC<{
-  title: string; onClick: () => void; children: React.ReactNode; style?: React.CSSProperties;
-}> = ({ title, onClick, children, style }) => (
-  <button className="format-toolbar-btn" title={title} onClick={onClick} style={style}>
+  title: string; onClick: () => void; children: React.ReactNode;
+  style?: React.CSSProperties; danger?: boolean;
+}> = ({ title, onClick, children, style, danger }) => (
+  <button
+    className={`format-toolbar-btn${danger ? ' danger' : ''}`}
+    title={title} onClick={onClick} style={style}
+  >
     {children}
   </button>
 );
 
-// ─── Editor inner (with state) ────────────────────────────────────────────────
+// ─── EditorInner ─────────────────────────────────────────────────────────────
 
 const EditorInner: React.FC<MilkdownEditorProps> = ({
   filePath, isBookmarked, onToggleBookmark, onOpenFile, templates = [],
@@ -184,11 +179,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [loading, setLoading] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
+  const [showTableTools, setShowTableTools] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0,
   });
-  const [resetKey, setResetKey] = useState(0);
 
   const editorRef = useRef<Editor | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -196,7 +191,14 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   currentFileRef.current = filePath;
   const sugRef = useRef(suggestions);
   sugRef.current = suggestions;
+  // Declared before early returns — fixes React error #300
   const noopReady = useCallback(() => {}, []);
+
+  // Register onOpenFile callback in the ProseMirror plugin so dblclick works
+  useEffect(() => {
+    if (onOpenFile) setOpenFileCallback(onOpenFile);
+    return () => setOpenFileCallback(() => {});
+  }, [onOpenFile]);
 
   // Font size
   useEffect(() => {
@@ -263,15 +265,6 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     } catch (err) { console.error('[insertWikilink]', err); }
   }, []);
 
-  // Double-click wikilink → open file
-  const handleEditorClick = useCallback((e: React.MouseEvent) => {
-    if (e.detail !== 2) return;
-    const el = (e.target as HTMLElement).closest('.jn-wikilink') as HTMLElement | null;
-    if (!el) return;
-    const target = el.dataset.target;
-    if (target && onOpenFile) onOpenFile(target.endsWith('.md') ? target : `${target}.md`);
-  }, [onOpenFile]);
-
   // Load file
   useEffect(() => {
     if (!filePath) { setContent(''); return; }
@@ -282,7 +275,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       .then(text => { setContent(text); setEditorKey(k => k + 1); })
       .catch(() => { setContent('# Error loading file'); setEditorKey(k => k + 1); })
       .finally(() => setLoading(false));
-  }, [filePath, resetKey]);
+  }, [filePath]);
 
   // Save
   const handleMarkdownChange = useCallback((md: string) => {
@@ -306,7 +299,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     try { return inst.action((ctx: any) => ctx.get(editorViewCtx)); } catch { return null; }
   }, []);
 
-  // Toolbar command
+  // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
     const view = getView();
     if (view && !view.hasFocus()) view.focus();
@@ -323,19 +316,12 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     requestAnimationFrame(() => { try { execWrapInList(view, listType); } catch (err) { console.warn('[list]', err); } });
   }, [getView]);
 
-  // Checklist
+  // Checklist — creates real GFM task list nodes
   const cmdChecklist = useCallback(() => {
     const view = getView();
     if (!view) return;
     if (!view.hasFocus()) view.focus();
-    requestAnimationFrame(() => {
-      try {
-        const { state, dispatch } = view;
-        const { $from } = state.selection;
-        const blockStart = $from.start($from.depth);
-        dispatch(state.tr.insertText('- [ ] ', blockStart, blockStart));
-      } catch (err) { console.warn('[checklist]', err); }
-    });
+    requestAnimationFrame(() => { try { execInsertChecklist(view); } catch (err) { console.warn('[checklist]', err); } });
   }, [getView]);
 
   // Blockquote toggle
@@ -345,9 +331,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (!view.hasFocus()) view.focus();
     requestAnimationFrame(() => {
       try {
-        if (!execLiftBlockquote(view)) {
-          editorRef.current?.action(callCommand(wrapInBlockquoteCommand.key));
-        }
+        if (!execLiftBlockquote(view)) editorRef.current?.action(callCommand(wrapInBlockquoteCommand.key));
       } catch (err) { console.warn('[blockquote]', err); }
     });
   }, [getView]);
@@ -390,6 +374,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
   return (
     <div className="h-full w-full flex flex-col min-w-0 overflow-hidden bg-bg-primary">
+
       {/* Header */}
       <div className="px-4 py-2 text-sm text-text-muted border-b border-border-color flex-shrink-0 flex items-center justify-between bg-bg-secondary/50 z-20">
         <div className="flex items-center gap-3 truncate">
@@ -430,26 +415,53 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         </div>
       </div>
 
-      {/* Toolbar */}
+      {/* Main toolbar */}
       <div className="format-toolbar">
+        {/* Inline formatting */}
         <ToolBtn title="Bold (Ctrl+B)" onClick={() => cmd(toggleStrongCommand.key)}><Bold size={13} /></ToolBtn>
         <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={13} /></ToolBtn>
         <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={13} /></ToolBtn>
         <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={13} /></ToolBtn>
+
         <div className="format-toolbar-separator" />
+
+        {/* Headings */}
         <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 12 }}>H1</ToolBtn>
         <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 11 }}>H2</ToolBtn>
         <ToolBtn title="Heading 3" onClick={() => cmd(wrapInHeadingCommand.key, 3)} style={{ fontWeight: 700, fontSize: 10 }}>H3</ToolBtn>
         <ToolBtn title="Plain paragraph" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 10 }}>¶</ToolBtn>
+
         <div className="format-toolbar-separator" />
-        <ToolBtn title="Bullet list" onClick={() => cmdList('bullet_list')}><List size={13} /></ToolBtn>
-        <ToolBtn title="Ordered list" onClick={() => cmdList('ordered_list')}><ListOrdered size={13} /></ToolBtn>
+
+        {/* Lists */}
+        <ToolBtn title="Bullet list (select multiple lines first)" onClick={() => cmdList('bullet_list')}><List size={13} /></ToolBtn>
+        <ToolBtn title="Ordered list (select multiple lines first)" onClick={() => cmdList('ordered_list')}><ListOrdered size={13} /></ToolBtn>
         <ToolBtn title="Task / checklist item" onClick={cmdChecklist}><CheckSquare size={13} /></ToolBtn>
+
         <div className="format-toolbar-separator" />
+
+        {/* Block */}
         <ToolBtn title="Blockquote (click again to remove)" onClick={cmdBlockquote}><Quote size={13} /></ToolBtn>
         <ToolBtn title="Horizontal rule" onClick={() => cmd(insertHrCommand.key)}><Minus size={13} /></ToolBtn>
-        <ToolBtn title="Insert table" onClick={() => cmd(insertTableCommand.key)}><Table size={13} /></ToolBtn>
+
         <div className="format-toolbar-separator" />
+
+        {/* Table */}
+        <ToolBtn title="Insert table" onClick={() => { cmd(insertTableCommand.key); setShowTableTools(true); }}>
+          <Table size={13} />
+        </ToolBtn>
+        <button
+          className={`format-toolbar-btn${showTableTools ? ' active' : ''}`}
+          title="Toggle table toolbar"
+          onClick={() => setShowTableTools(t => !t)}
+          style={{ fontSize: 9, fontWeight: 600 }}
+        >
+          TBL▾
+        </button>
+
+        <div className="format-toolbar-separator" />
+
+        {/* Font size */}
         <select title="Font size" value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
           onChange={e => setFontSize(Number(e.target.value))}>
           {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
@@ -459,6 +471,35 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</ToolBtn>
         <ToolBtn title="Reset font (Ctrl+0)" onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</ToolBtn>
       </div>
+
+      {/* Table toolbar — shown when cursor is in a table or toggled on */}
+      {showTableTools && (
+        <div className="format-toolbar" style={{ borderTop: '1px solid var(--border-color)', background: 'rgba(0,200,130,0.04)' }}>
+          <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.6 }}>Table:</span>
+          <ToolBtn title="Add column after" onClick={() => cmd(addColAfterCommand.key)}>
+            <span style={{ fontSize: 10, fontWeight: 600 }}>+Col→</span>
+          </ToolBtn>
+          <ToolBtn title="Add column before" onClick={() => cmd(addColBeforeCommand.key)}>
+            <span style={{ fontSize: 10, fontWeight: 600 }}>←Col+</span>
+          </ToolBtn>
+          <ToolBtn title="Add row after" onClick={() => cmd(addRowAfterCommand.key)}>
+            <span style={{ fontSize: 10, fontWeight: 600 }}>+Row↓</span>
+          </ToolBtn>
+          <ToolBtn title="Add row before" onClick={() => cmd(addRowBeforeCommand.key)}>
+            <span style={{ fontSize: 10, fontWeight: 600 }}>↑Row+</span>
+          </ToolBtn>
+          <div className="format-toolbar-separator" />
+          <ToolBtn title="Delete selected cell(s)" danger onClick={() => cmd(deleteSelectedCellsCommand.key)}>
+            <span style={{ fontSize: 10, fontWeight: 600 }}>Del</span>
+          </ToolBtn>
+          <div className="format-toolbar-separator" />
+          <ToolBtn title="Align left" onClick={() => cmd(setAlignCommand.key, 'left')}><AlignLeft size={12} /></ToolBtn>
+          <ToolBtn title="Align center" onClick={() => cmd(setAlignCommand.key, 'center')}><AlignCenter size={12} /></ToolBtn>
+          <ToolBtn title="Align right" onClick={() => cmd(setAlignCommand.key, 'right')}><AlignRight size={12} /></ToolBtn>
+          <div className="format-toolbar-separator" />
+          <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Tab=next cell · Shift+Tab=prev</span>
+        </div>
+      )}
 
       {/* Editor + wikilink dropdown */}
       <div className="flex-grow min-w-0 overflow-auto custom-scrollbar relative">
@@ -473,7 +514,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
             ))}
           </div>
         )}
-        <div className="milkdown-wrapper h-full" onClick={handleEditorClick}>
+        <div className="milkdown-wrapper h-full">
           <MilkdownProvider>
             <InnerMilkdown
               key={editorKey}

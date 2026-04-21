@@ -722,3 +722,40 @@ body {
   text-decoration: line-through !important;
   opacity: 0.55 !important;
 }
+
+/* Table toolbar danger button */
+.format-toolbar-btn.danger:hover {
+  color: var(--error) !important;
+  background: rgba(244, 63, 94, 0.1) !important;
+}
+
+/* Milkdown table column resize handle (prosemirror-tables) */
+.milkdown-wrapper .editor .tableWrapper {
+  overflow-x: auto !important;
+  margin: 6px 0 !important;
+}
+.milkdown-wrapper .editor table .column-resize-handle {
+  position: absolute !important;
+  right: -2px !important;
+  top: 0 !important;
+  bottom: -2px !important;
+  width: 4px !important;
+  background-color: var(--interactive-accent) !important;
+  pointer-events: none !important;
+  opacity: 0.5 !important;
+}
+.milkdown-wrapper .editor table .selectedCell {
+  background: rgba(0, 200, 130, 0.12) !important;
+  position: relative !important;
+}
+.milkdown-wrapper .editor table .selectedCell::after {
+  content: '';
+  position: absolute !important;
+  inset: 0 !important;
+  background: rgba(0, 200, 130, 0.12) !important;
+  pointer-events: none !important;
+}
+/* resize-cursor class added to editor during column drag */
+.milkdown-wrapper .editor.resize-cursor {
+  cursor: col-resize !important;
+}

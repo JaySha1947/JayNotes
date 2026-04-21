@@ -111,6 +111,9 @@ export const Graph: React.FC<GraphProps> = ({ onNodeClick }) => {
 
   useEffect(() => {
     fetchGraph();
+    const onSaved = () => fetchGraph();
+    window.addEventListener('file-saved', onSaved);
+    return () => window.removeEventListener('file-saved', onSaved);
   }, [selectedFolder]);
 
   useEffect(() => {
