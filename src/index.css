@@ -469,9 +469,15 @@ body {
   margin: 2px 0 4px !important;
 }
 .milkdown-wrapper .editor li {
-  margin: 1px 0 !important;
+  margin: 0 !important;
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
   color: var(--text-normal) !important;
   line-height: 1.4 !important;
+}
+/* Remove paragraph margin inside list items so spacing is controlled by li only */
+.milkdown-wrapper .editor li > p {
+  margin: 0 !important;
 }
 .milkdown-wrapper .editor ul li::marker {
   color: var(--interactive-accent) !important;

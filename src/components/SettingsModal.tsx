@@ -153,22 +153,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     placeholder="e.g. Welcome.md"
                   />
                 </div>
-                <div className="pt-6 border-t border-border-color">
-                  <h3 className="text-text-normal font-medium mb-1">Vault Path (Server)</h3>
-                  <p className="text-sm text-text-muted mb-3">
-                    Because this is a web application running in a container, it cannot access your local computer's file system directly. 
-                    The files are stored in a folder on the server.
-                  </p>
-                  <input 
-                    type="text" 
-                    value="/app/vault"
-                    disabled
-                    className="w-full bg-bg-secondary border border-border-color rounded px-3 py-2 outline-none text-sm opacity-50 cursor-not-allowed"
-                  />
-                  <p className="text-xs text-text-muted mt-2">
-                    To access these files from another app (like OpenWebUI), you must use Docker volume mounts to share the <code>/app/vault</code> directory between containers.
-                  </p>
-                </div>
+
                 <div className="pt-6 border-t border-border-color">
                   <h3 className="text-text-normal font-medium mb-1">Confirm file deletion</h3>
                   <p className="text-sm text-text-muted mb-3">Show a confirmation prompt before deleting a file.</p>

@@ -94,7 +94,97 @@ async function uploadImageToServer(file: File): Promise<string> {
   return `/api/${data.path}?token=${encodeURIComponent(token ?? '')}`;
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Resizable image NodeView ─────────────────────────────────────────────────
+// Wraps every image node in a container with a drag handle so users can resize.
+// Width is stored in the `title` attribute as a pixel value (e.g. "480").
+
+import { $view } from '@milkdown/utils';
+import { imageSchema } from '@milkdown/preset-commonmark';
+
+const resizableImageView = $view(imageSchema.node, () => (node: any, view: any, getPos: any) => {
+  // Container
+  const container = document.createElement('span');
+  container.style.cssText = 'display:inline-block;position:relative;max-width:100%;vertical-align:bottom;line-height:0;';
+  container.contentEditable = 'false';
+
+  // Image element
+  const img = document.createElement('img');
+  img.src = node.attrs.src || '';
+  img.alt = node.attrs.alt || '';
+  img.style.cssText = 'display:block;max-width:100%;height:auto;border-radius:4px;cursor:default;';
+
+  // Restore saved width
+  const savedWidth = node.attrs.title ? parseInt(node.attrs.title, 10) : null;
+  if (savedWidth && savedWidth > 0) {
+    img.style.width = `${savedWidth}px`;
+  }
+
+  // Resize handle (bottom-right corner)
+  const handle = document.createElement('span');
+  handle.style.cssText = [
+    'position:absolute;bottom:4px;right:4px;width:14px;height:14px;',
+    'background:var(--interactive-accent,#00c882);border-radius:3px;',
+    'cursor:nwse-resize;opacity:0;transition:opacity 0.15s;z-index:10;',
+    'display:flex;align-items:center;justify-content:center;',
+  ].join('');
+  handle.innerHTML = '<svg width="8" height="8" viewBox="0 0 8 8" fill="white"><path d="M1 7L7 1M4 7L7 4M7 7V7"/><path d="M2 7h5V2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>';
+
+  container.addEventListener('mouseenter', () => { handle.style.opacity = '1'; });
+  container.addEventListener('mouseleave', () => { handle.style.opacity = '0'; });
+
+  // Drag-to-resize
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = img.offsetWidth;
+
+    const onMove = (ev: MouseEvent) => {
+      const newWidth = Math.max(80, startWidth + (ev.clientX - startX));
+      img.style.width = `${newWidth}px`;
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      const finalWidth = Math.round(Math.max(80, startWidth + (ev.clientX - startX)));
+      img.style.width = `${finalWidth}px`;
+      // Persist width in the `title` attr via a ProseMirror transaction
+      if (typeof getPos === 'function') {
+        const pos = getPos();
+        if (pos !== undefined) {
+          const tr = view.state.tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            title: String(finalWidth),
+          });
+          view.dispatch(tr);
+        }
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  container.appendChild(img);
+  container.appendChild(handle);
+
+  return {
+    dom: container,
+    update(updatedNode: any) {
+      if (updatedNode.type.name !== 'image') return false;
+      img.src = updatedNode.attrs.src || '';
+      img.alt = updatedNode.attrs.alt || '';
+      const w = updatedNode.attrs.title ? parseInt(updatedNode.attrs.title, 10) : null;
+      if (w && w > 0) img.style.width = `${w}px`;
+      else img.style.width = '';
+      return true;
+    },
+    ignoreMutation: () => true,
+    stopEvent: (e: Event) => e.type === 'mousedown' && (e.target as HTMLElement) === handle,
+  };
+});
+
 
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
@@ -161,6 +251,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(upload)
       .use(trailing)
       .use(columnResizingPlugin)
+      .use(resizableImageView)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
       .use(checkboxClickPlugin),
@@ -422,93 +513,81 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   return (
     <div className="h-full w-full flex flex-col min-w-0 overflow-hidden bg-bg-primary">
 
-      {/* Header */}
-      <div className="px-4 py-2 text-sm text-text-muted border-b border-border-color flex-shrink-0 flex items-center justify-between bg-bg-secondary/50 z-20">
-        <div className="flex items-center gap-3 truncate">
-          <FileText size={14} className="text-interactive-accent flex-shrink-0" />
-          <span className="truncate font-medium text-text-normal">{filePath}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          {onToggleBookmark && (
-            <button onClick={onToggleBookmark}
-              className={`p-1.5 rounded transition-colors ${isBookmarked ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
-              title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}>
-              <Bookmark size={14} fill={isBookmarked ? 'currentColor' : 'none'} />
-            </button>
-          )}
-          <span className="text-xs text-text-muted px-1 select-none tabular-nums" title="Ctrl+= / Ctrl+- / Ctrl+0">{fontSize}px</span>
-          <div className="relative">
-            <button onClick={() => setIsTemplateMenuOpen(o => !o)}
-              className={`p-1.5 rounded transition-colors ${isTemplateMenuOpen ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
-              title="Insert Template">
-              <ClipboardList size={14} />
-            </button>
-            {isTemplateMenuOpen && (
-              <div className="absolute right-0 mt-2 w-48 bg-bg-secondary border border-border-color rounded-md shadow-xl z-50 py-1 overflow-hidden">
-                <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider border-b border-border-color">Insert Template</div>
-                <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                  {templates.filter(t => t.type === 'file').length === 0
-                    ? <div className="px-3 py-2 text-xs text-text-muted italic">No templates found</div>
-                    : templates.filter(t => t.type === 'file').map(t => (
-                      <button key={t.path} onClick={() => handleApplyTemplate(t)}
-                        className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate">
-                        {t.name}
-                      </button>
-                    ))}
+      {/* Header + Toolbar combined */}
+      <div className="flex-shrink-0 border-b border-border-color bg-bg-secondary/50 z-20">
+        {/* File path row with inline toolbar */}
+        <div className="flex items-center min-h-0 overflow-hidden">
+          {/* File path — compact left side */}
+          <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-text-muted flex-shrink-0 min-w-0 max-w-[200px]">
+            <FileText size={13} className="text-interactive-accent flex-shrink-0" />
+            <span className="truncate font-medium text-text-normal text-xs">{filePath?.split('/').pop()}</span>
+          </div>
+          {/* Toolbar — scrollable centre region */}
+          <div className="flex-grow overflow-x-auto min-w-0">
+            <div className="format-toolbar border-0 py-0.5 px-1 flex-nowrap" style={{ minWidth: 'max-content' }}>
+              <ToolBtn title="Bold (Ctrl+B)" onClick={() => cmd(toggleStrongCommand.key)}><Bold size={12} /></ToolBtn>
+              <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={12} /></ToolBtn>
+              <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={12} /></ToolBtn>
+              <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={12} /></ToolBtn>
+              <div className="format-toolbar-separator" />
+              <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 11 }}>H1</ToolBtn>
+              <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 10 }}>H2</ToolBtn>
+              <ToolBtn title="Heading 3" onClick={() => cmd(wrapInHeadingCommand.key, 3)} style={{ fontWeight: 700, fontSize: 9 }}>H3</ToolBtn>
+              <ToolBtn title="Plain paragraph" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 9 }}>¶</ToolBtn>
+              <div className="format-toolbar-separator" />
+              <ToolBtn title="Bullet list" onClick={() => cmdList('bullet_list')}><List size={12} /></ToolBtn>
+              <ToolBtn title="Ordered list" onClick={() => cmdList('ordered_list')}><ListOrdered size={12} /></ToolBtn>
+              <ToolBtn title="Task / checklist" onClick={cmdChecklist}><CheckSquare size={12} /></ToolBtn>
+              <div className="format-toolbar-separator" />
+              <ToolBtn title="Blockquote" onClick={cmdBlockquote}><Quote size={12} /></ToolBtn>
+              <ToolBtn title="Horizontal rule" onClick={() => cmd(insertHrCommand.key)}><Minus size={12} /></ToolBtn>
+              <div className="format-toolbar-separator" />
+              <ToolBtn title="Insert table" onClick={() => cmd(insertTableCommand.key)}><Table size={12} /></ToolBtn>
+              <div className="format-toolbar-separator" />
+              <select title="Font size" value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
+                onChange={e => setFontSize(Number(e.target.value))}
+                style={{ fontSize: 10, padding: '1px 2px', height: 22 }}>
+                {FONT_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                {!FONT_SIZES.includes(fontSize) && <option value={fontSize}>{fontSize}</option>}
+              </select>
+            </div>
+          </div>
+          {/* Right actions — font size + template + bookmark */}
+          <div className="flex items-center gap-0.5 px-2 flex-shrink-0">
+            <ToolBtn title="Larger (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 11 }}>A⁺</ToolBtn>
+            <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 10 }}>A⁻</ToolBtn>
+            <div className="format-toolbar-separator" />
+            <div className="relative">
+              <button onClick={() => setIsTemplateMenuOpen(o => !o)}
+                className={`p-1.5 rounded transition-colors ${isTemplateMenuOpen ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
+                title="Insert Template">
+                <ClipboardList size={13} />
+              </button>
+              {isTemplateMenuOpen && (
+                <div className="absolute right-0 mt-2 w-48 bg-bg-secondary border border-border-color rounded-md shadow-xl z-50 py-1 overflow-hidden">
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider border-b border-border-color">Insert Template</div>
+                  <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                    {templates.filter(t => t.type === 'file').length === 0
+                      ? <div className="px-3 py-2 text-xs text-text-muted italic">No templates found</div>
+                      : templates.filter(t => t.type === 'file').map(t => (
+                        <button key={t.path} onClick={() => handleApplyTemplate(t)}
+                          className="w-full text-left px-3 py-2 text-xs text-text-normal hover:bg-bg-primary hover:text-interactive-accent transition-colors truncate">
+                          {t.name}
+                        </button>
+                      ))}
+                  </div>
                 </div>
-              </div>
+              )}
+            </div>
+            {onToggleBookmark && (
+              <button onClick={onToggleBookmark}
+                className={`p-1.5 rounded transition-colors ${isBookmarked ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
+                title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}>
+                <Bookmark size={13} fill={isBookmarked ? 'currentColor' : 'none'} />
+              </button>
             )}
           </div>
         </div>
-      </div>
-
-      {/* Main toolbar */}
-      <div className="format-toolbar">
-        {/* Inline formatting */}
-        <ToolBtn title="Bold (Ctrl+B)" onClick={() => cmd(toggleStrongCommand.key)}><Bold size={13} /></ToolBtn>
-        <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={13} /></ToolBtn>
-        <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={13} /></ToolBtn>
-        <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={13} /></ToolBtn>
-
-        <div className="format-toolbar-separator" />
-
-        {/* Headings */}
-        <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 12 }}>H1</ToolBtn>
-        <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 11 }}>H2</ToolBtn>
-        <ToolBtn title="Heading 3" onClick={() => cmd(wrapInHeadingCommand.key, 3)} style={{ fontWeight: 700, fontSize: 10 }}>H3</ToolBtn>
-        <ToolBtn title="Plain paragraph" onClick={() => cmd(turnIntoTextCommand.key)} style={{ fontSize: 10 }}>¶</ToolBtn>
-
-        <div className="format-toolbar-separator" />
-
-        {/* Lists */}
-        <ToolBtn title="Bullet list (select multiple lines first)" onClick={() => cmdList('bullet_list')}><List size={13} /></ToolBtn>
-        <ToolBtn title="Ordered list (select multiple lines first)" onClick={() => cmdList('ordered_list')}><ListOrdered size={13} /></ToolBtn>
-        <ToolBtn title="Task / checklist item" onClick={cmdChecklist}><CheckSquare size={13} /></ToolBtn>
-
-        <div className="format-toolbar-separator" />
-
-        {/* Block */}
-        <ToolBtn title="Blockquote (click again to remove)" onClick={cmdBlockquote}><Quote size={13} /></ToolBtn>
-        <ToolBtn title="Horizontal rule" onClick={() => cmd(insertHrCommand.key)}><Minus size={13} /></ToolBtn>
-
-        <div className="format-toolbar-separator" />
-
-        {/* Table */}
-        <ToolBtn title="Insert table" onClick={() => { cmd(insertTableCommand.key); }}>
-          <Table size={13} />
-        </ToolBtn>
-
-        <div className="format-toolbar-separator" />
-
-        {/* Font size */}
-        <select title="Font size" value={FONT_SIZES.includes(fontSize) ? fontSize : ''}
-          onChange={e => setFontSize(Number(e.target.value))}>
-          {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
-          {!FONT_SIZES.includes(fontSize) && <option value={fontSize}>{fontSize}px</option>}
-        </select>
-        <ToolBtn title="Larger (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 13 }}>A⁺</ToolBtn>
-        <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 11 }}>A⁻</ToolBtn>
-        <ToolBtn title="Reset font (Ctrl+0)" onClick={() => setFontSize(DEFAULT_FONT_SIZE)} style={{ fontSize: 10 }}>↺</ToolBtn>
       </div>
 
       {/* Table toolbar — auto-shows when cursor is inside a table */}

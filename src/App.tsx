@@ -3,7 +3,7 @@ import { Group, Panel as PanelOrig, Separator } from 'react-resizable-panels';
 const PanelGroup = Group as any;
 const Panel = PanelOrig as any;
 const PanelResizeHandle = Separator as any;
-import { Settings, Search, Network, FileText, Plus, X, Calendar, Clock, Bookmark, LayoutDashboard, HelpCircle, ArrowLeft, ArrowRight, LogOut, PanelRight, ChevronLeft, ChevronRight, ClipboardList, Layers, Edit3, Trash2, Copy, LayoutGrid, FolderTree, FilePlus2, SquarePlus, Users, User, ShieldAlert, Shield } from 'lucide-react';
+import { Settings, Search, Network, FileText, Plus, X, Calendar, Clock, Bookmark, LayoutDashboard, HelpCircle, ArrowLeft, ArrowRight, LogOut, PanelRight, ChevronLeft, ChevronRight, ClipboardList, Layers, Edit3, Trash2, Copy, LayoutGrid, FolderTree, FilePlus2, SquarePlus, Users, User, ShieldAlert, Shield, Pencil, Check } from 'lucide-react';
 import { FileExplorer } from './components/FileExplorer';
 import { MilkdownEditor } from './components/MilkdownEditor';
 import { Canvas } from './components/Canvas';
@@ -27,8 +27,9 @@ export default function App() {
   const [role, setRole] = useState<string | null>(localStorage.getItem('jays_notes_role'));
   const [username, setUsername] = useState<string | null>(localStorage.getItem('jays_notes_username'));
   
-  const defaultHome = 'Welcome.md';
-  const [tabs, setTabs] = useState<TabData[]>([{ id: 'home', type: 'editor', title: 'Welcome', path: defaultHome }]);
+  const defaultHome = localStorage.getItem('jays_notes_home') || 'Welcome.md';
+  const homeTitle = defaultHome.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
+  const [tabs, setTabs] = useState<TabData[]>([{ id: 'home', type: 'editor', title: homeTitle, path: defaultHome }]);
   const [activeTabId, setActiveTabId] = useState<string | null>('home');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -53,6 +54,8 @@ export default function App() {
   const [tags, setTags] = useState<{tag: string, count: number, files: string[]}[]>([]);
   const [rightSidebarTab, setRightSidebarTab] = useState<'links' | 'tags'>('links');
   const [templates, setTemplates] = useState<{ name: string, path: string, type: string }[]>([]);
+  const [renamingTemplatePath, setRenamingTemplatePath] = useState<string | null>(null);
+  const [renamingTemplateValue, setRenamingTemplateValue] = useState('');
   
   const [newPassword, setNewPassword] = useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -87,7 +90,9 @@ export default function App() {
     setToken(newToken);
     setRole(newRole);
     setUsername(newUsername);
-    setTabs([{ id: 'home', type: 'editor', title: 'Welcome', path: 'Welcome.md' }]);
+    const h = localStorage.getItem('jays_notes_home') || 'Welcome.md';
+    const ht = h.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
+    setTabs([{ id: 'home', type: 'editor', title: ht, path: h }]);
     setActiveTabId('home');
   };
 
@@ -203,11 +208,7 @@ export default function App() {
   };
 
   const handleDeleteFile = async (path: string) => {
-    if (path === 'Templates/Daily Note.md') {
-      alert('The Daily Note template is a system file and cannot be deleted.');
-      return;
-    }
-    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+    if (!confirm(`Are you sure you want to delete ${path.split('/').pop()}?`)) return;
     try {
       const res = await apiFetch('/api/file/delete', {
         method: 'POST',
@@ -223,6 +224,27 @@ export default function App() {
     } catch (error) {
       console.error('Failed to delete file', error);
     }
+  };
+
+  const handleRenameTemplate = async (oldPath: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) { setRenamingTemplatePath(null); return; }
+    const ext = oldPath.endsWith('.canvas') ? '.canvas' : '.md';
+    const folder = oldPath.split('/').slice(0, -1).join('/');
+    const newPath = folder ? `${folder}/${trimmed}${ext}` : `${trimmed}${ext}`;
+    if (newPath === oldPath) { setRenamingTemplatePath(null); return; }
+    try {
+      const res = await apiFetch('/api/file/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: oldPath, destination: newPath }),
+      });
+      if (res.ok) {
+        setTabs(prev => prev.map(t => t.path === oldPath ? { ...t, path: newPath, title: trimmed } : t));
+        setRefreshTrigger(prev => prev + 1);
+      }
+    } catch (e) { console.error('Failed to rename template', e); }
+    setRenamingTemplatePath(null);
   };
 
   const scrollTabs = (direction: 'left' | 'right') => {
@@ -945,106 +967,79 @@ export default function App() {
                     <div className="p-4 border-b border-border-color flex justify-between items-center bg-bg-secondary sticky top-0 z-10">
                       <div>
                         <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Templates</h3>
-                        <p className="text-[10px] text-text-muted mt-1">Manage reusable note structures</p>
+                        <p className="text-[10px] text-text-muted mt-1">Manage reusable note templates</p>
                       </div>
                       <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => handleNewFile(undefined, 'Templates')}
+                        <button onClick={() => handleNewFile(undefined, 'Templates')}
                           className="p-1.5 text-text-muted hover:text-interactive-accent hover:bg-bg-primary rounded transition-colors"
-                          title="New Note Template"
-                        >
-                          <FilePlus2 size={14} />
-                        </button>
-                        <button 
-                          onClick={() => handleNewFile(undefined, 'Templates', 'canvas')}
+                          title="New Note Template"><FilePlus2 size={14} /></button>
+                        <button onClick={() => handleNewFile(undefined, 'Templates', 'canvas')}
                           className="p-1.5 text-text-muted hover:text-interactive-accent hover:bg-bg-primary rounded transition-colors"
-                          title="New Canvas Template"
-                        >
-                          <LayoutGrid size={14} />
-                        </button>
+                          title="New Canvas Template"><LayoutGrid size={14} /></button>
                       </div>
                     </div>
-                    <div className="flex-grow overflow-y-auto p-2">
-                        {/* System / Default Templates Section */}
-                        <div className="mb-4">
-                          <div className="px-2 py-1 mb-2 text-[10px] font-bold text-text-muted uppercase tracking-[0.2em] border-b border-border-color/30 flex items-center justify-between">
-                            <span>System Templates</span>
-                            <Shield size={10} className="text-interactive-accent opacity-50" />
-                          </div>
-                          
-                          <div 
-                            className="px-3 py-2 hover:bg-interactive-hover rounded-lg cursor-pointer text-xs text-text-normal flex items-center gap-3 group transition-colors"
-                            onClick={() => handleSelectFile('Templates/Daily Note.md')}
+                    <div className="flex-grow overflow-y-auto p-2 space-y-1">
+                      {templates.length === 0 ? (
+                        <div className="p-8 text-center text-text-muted text-[10px] italic border border-dashed border-border-color/30 rounded-xl mt-4">
+                          <FilePlus2 size={24} className="mx-auto mb-2 opacity-20" />
+                          No templates yet
+                        </div>
+                      ) : templates.map((template, i) => {
+                        const isDailyNote = template.path === 'Templates/Daily Note.md';
+                        const isRenaming = renamingTemplatePath === template.path;
+                        return (
+                          <div key={i}
+                            className="px-3 py-2 hover:bg-interactive-hover rounded-lg cursor-pointer text-xs text-text-normal flex items-center gap-2 group transition-colors"
+                            onClick={() => !isRenaming && handleSelectFile(template.path)}
                           >
-                            <Calendar size={12} className="text-interactive-accent" />
-                            <span className="truncate flex-grow font-medium">Daily Note</span>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleNewFromTemplate({ name: 'Daily Note', path: 'Templates/Daily Note.md', type: 'file' }); }}
-                                className="p-0.5 text-text-muted hover:text-interactive-accent"
-                                title="Create New from Template"
-                              >
+                            {isDailyNote
+                              ? <Calendar size={12} className="text-interactive-accent flex-shrink-0" />
+                              : template.type === 'canvas'
+                                ? <LayoutGrid size={12} className="text-purple-400 flex-shrink-0" />
+                                : <FileText size={12} className="text-interactive-accent flex-shrink-0" />}
+                            {isRenaming ? (
+                              <input
+                                autoFocus
+                                className="flex-grow bg-bg-primary border border-interactive-accent rounded px-1 py-0.5 text-xs outline-none"
+                                value={renamingTemplateValue}
+                                onChange={e => setRenamingTemplateValue(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') handleRenameTemplate(template.path, renamingTemplateValue);
+                                  if (e.key === 'Escape') setRenamingTemplatePath(null);
+                                }}
+                                onClick={e => e.stopPropagation()}
+                              />
+                            ) : (
+                              <span className="truncate flex-grow font-medium">
+                                {template.name.replace(/\.(md|canvas)$/i, '')}
+                                {isDailyNote && <span className="ml-1 text-[9px] text-interactive-accent opacity-60">daily</span>}
+                              </span>
+                            )}
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                              {/* Use: create new note from this template */}
+                              <button onClick={e => { e.stopPropagation(); handleNewFromTemplate(template); }}
+                                className="p-0.5 text-text-muted hover:text-interactive-accent" title="New note from template">
                                 <Plus size={12} />
                               </button>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleDuplicateFile('Templates/Daily Note.md'); }}
-                                className="p-0.5 text-text-muted hover:text-interactive-accent"
-                                title="Duplicate"
-                              >
-                                <Copy size={10} />
+                              {/* Edit: open template for editing */}
+                              <button onClick={e => { e.stopPropagation(); handleSelectFile(template.path); }}
+                                className="p-0.5 text-text-muted hover:text-interactive-accent" title="Edit template">
+                                <Pencil size={10} />
+                              </button>
+                              {/* Rename */}
+                              <button onClick={e => { e.stopPropagation(); setRenamingTemplatePath(template.path); setRenamingTemplateValue(template.name.replace(/\.(md|canvas)$/i, '')); }}
+                                className="p-0.5 text-text-muted hover:text-interactive-accent" title="Rename template">
+                                <Edit3 size={10} />
+                              </button>
+                              {/* Delete */}
+                              <button onClick={e => { e.stopPropagation(); handleDeleteFile(template.path); }}
+                                className="p-0.5 text-text-muted hover:text-error" title="Delete template">
+                                <Trash2 size={10} />
                               </button>
                             </div>
                           </div>
-                        </div>
-
-                        {/* Custom Templates Section */}
-                        <div className="flex-grow">
-                          <div className="px-2 py-1 mb-2 text-[10px] font-bold text-text-muted uppercase tracking-[0.2em] border-b border-border-color/30">
-                            Custom Templates
-                          </div>
-                          <div className="space-y-1">
-                            {templates.filter((t: any) => t.path !== 'Templates/Daily Note.md').length === 0 ? (
-                              <div className="p-8 text-center text-text-muted text-[10px] italic border border-dashed border-border-color/30 rounded-xl">
-                                <FilePlus2 size={24} className="mx-auto mb-2 opacity-20" />
-                                No custom templates
-                              </div>
-                            ) : (
-                              templates.filter((t: any) => t.path !== 'Templates/Daily Note.md').map((template, i) => (
-                                <div 
-                                  key={i} 
-                                  className="px-3 py-2 hover:bg-interactive-hover rounded-lg cursor-pointer text-xs text-text-normal flex items-center gap-3 group transition-colors"
-                                  onClick={() => handleSelectFile(template.path)}
-                                >
-                                  {template.type === 'canvas' ? <LayoutGrid size={12} className="text-purple-400" /> : <FileText size={12} className="text-interactive-accent" />}
-                                  <span className="truncate flex-grow font-medium">{template.name.replace('.md', '')}</span>
-                                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); handleNewFromTemplate(template); }}
-                                      className="p-0.5 text-text-muted hover:text-interactive-accent"
-                                      title="Create New from Template"
-                                    >
-                                      <Plus size={12} />
-                                    </button>
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); handleDuplicateFile(template.path); }}
-                                      className="p-0.5 text-text-muted hover:text-interactive-accent"
-                                      title="Duplicate"
-                                    >
-                                      <Copy size={10} />
-                                    </button>
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); handleDeleteFile(template.path); }}
-                                      className="p-0.5 text-text-muted hover:text-error"
-                                      title="Delete"
-                                    >
-                                      <Trash2 size={10} />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

@@ -21,6 +21,7 @@ interface FileExplorerProps {
 const FileTreeItem: React.FC<{
   node: FileNode;
   onSelectFile: (path: string) => void;
+  onFolderSelect: (path: string) => void;
   activeFile: string | null;
   level: number;
   onContextMenu: (e: React.MouseEvent, path: string, isFolder: boolean) => void;
@@ -31,7 +32,7 @@ const FileTreeItem: React.FC<{
   onInlineCreateCancel?: () => void;
   onDuplicateFile?: (path: string) => void;
   onDeleteFile?: (path: string) => void;
-}> = ({ node, onSelectFile, activeFile, level, onContextMenu, onMoveFile, bookmarks, inlineCreate, onInlineCreateSubmit, onInlineCreateCancel, onDuplicateFile, onDeleteFile }) => {
+}> = ({ node, onSelectFile, onFolderSelect, activeFile, level, onContextMenu, onMoveFile, bookmarks, inlineCreate, onInlineCreateSubmit, onInlineCreateCancel, onDuplicateFile, onDeleteFile }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
   const isFolder = node.type === 'folder';
@@ -88,8 +89,12 @@ const FileTreeItem: React.FC<{
         onClick={() => {
           if (isFolder) {
             setIsOpen(!isOpen);
+            onFolderSelect(node.path);
           } else {
             onSelectFile(node.path);
+            // Select parent folder so new notes go in the right place
+            const parent = node.path.includes('/') ? node.path.split('/').slice(0, -1).join('/') : '';
+            onFolderSelect(parent);
           }
         }}
         onContextMenu={(e) => onContextMenu(e, node.path, isFolder)}
@@ -165,6 +170,7 @@ const FileTreeItem: React.FC<{
               key={child.path}
               node={child}
               onSelectFile={onSelectFile}
+              onFolderSelect={onFolderSelect}
               activeFile={activeFile}
               level={level + 1}
               onContextMenu={onContextMenu}
@@ -190,6 +196,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
   const [inlineCreate, setInlineCreate] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'name-asc' | 'name-desc' | 'created-desc' | 'created-asc' | 'modified-desc' | 'modified-asc'>('name-asc');
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  // Track which folder is "active context" for new file/folder creation
+  const [selectedFolder, setSelectedFolder] = useState<string>('');
 
   const fetchFiles = async () => {
     try {
@@ -252,6 +260,19 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
   const handleNewNoteInFolder = (folderPath: string) => {
     onCreateFile(folderPath, 'file');
     setContextMenu(null);
+  };
+
+  // Derive the folder to create items in:
+  // - if a folder was explicitly selected, use it
+  // - if a file is active, use its parent folder
+  // - otherwise root
+  const getTargetFolder = () => {
+    if (selectedFolder) return selectedFolder;
+    if (activeFile) {
+      const parts = activeFile.split('/');
+      return parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+    }
+    return '';
   };
 
   const handleDuplicateFile = async (filePath: string) => {
@@ -431,13 +452,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
           Files
         </div>
         <div className="flex items-center gap-1 text-text-muted relative">
-          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title="New note" onClick={() => onCreateFile('')}>
+          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title={`New note${getTargetFolder() ? ` in ${getTargetFolder()}` : ' in root'}`} onClick={() => onCreateFile(getTargetFolder(), 'file')}>
             <FilePlus2 size={14} />
           </button>
-          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title="New canvas" onClick={() => handleNewCanvas('')}>
+          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title={`New canvas${getTargetFolder() ? ` in ${getTargetFolder()}` : ' in root'}`} onClick={() => handleNewCanvas(getTargetFolder())}>
             <SquarePlus size={14} />
           </button>
-          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title="New folder" onClick={() => handleNewFolder('')}>
+          <button className="p-1 hover:text-text-normal hover:bg-interactive-hover rounded" title={`New folder${getTargetFolder() ? ` in ${getTargetFolder()}` : ' in root'}`} onClick={() => handleNewFolder(getTargetFolder())}>
             <FolderPlus size={14} />
           </button>
           <button 
@@ -489,6 +510,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
           key={node.path}
           node={node}
           onSelectFile={onSelectFile}
+          onFolderSelect={setSelectedFolder}
           activeFile={activeFile}
           level={0}
           onContextMenu={handleContextMenu}
