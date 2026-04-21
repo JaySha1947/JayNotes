@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { tagPlugin, linkPlugin, calloutPlugin, imagePlugin } from '../lib/editor-extensions';
+import { listKeymap, alphaRomanMarkerPlugin } from '../lib/list-extension';
 import { apiFetch } from '../lib/api';
 
 interface EditorProps {
@@ -283,13 +284,25 @@ export const Editor: React.FC<EditorProps> = ({
     if (!view) return;
     const { from } = view.state.selection.main;
     const line = view.state.doc.lineAt(from);
-    let lineNum = line.number;
-    let count = 1;
-    while (lineNum > 1) {
-      const prev = view.state.doc.line(lineNum - 1);
-      if (/^[a-z]+\.\s/.test(prev.text)) { count++; lineNum--; } else break;
+    // If already an alpha list item, remove it
+    if (/^[a-z]{1,3}\. /i.test(line.text)) {
+      const m = line.text.match(/^([a-z]{1,3}\. )/i)!;
+      view.dispatch({ changes: { from: line.from, to: line.from + m[1].length, insert: '' } });
+      view.focus();
+      return;
     }
-    toggleLinePrefix(getAlphaPrefix(count) + ' ');
+    // Count preceding consecutive alpha-list lines to determine position
+    let count = 1;
+    let lineNum = line.number - 1;
+    while (lineNum >= 1) {
+      const prev = view.state.doc.line(lineNum);
+      if (/^[a-z]{1,3}\. /i.test(prev.text)) { count++; lineNum--; } else break;
+    }
+    const prefix = getAlphaPrefix(count) + ' ';
+    // Strip any existing list prefix then prepend
+    const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s|[a-z]{1,3}\.\s|[ivxlcdm]{1,6}\.\s|- \[[ x]\] )/i, '$1');
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: prefix + stripped } });
+    view.focus();
   };
 
   const toggleRomanList = () => {
@@ -297,13 +310,24 @@ export const Editor: React.FC<EditorProps> = ({
     if (!view) return;
     const { from } = view.state.selection.main;
     const line = view.state.doc.lineAt(from);
-    let lineNum = line.number;
-    let count = 1;
-    while (lineNum > 1) {
-      const prev = view.state.doc.line(lineNum - 1);
-      if (/^[ivxlcdm]+\.\s/i.test(prev.text)) { count++; lineNum--; } else break;
+    // If already a roman list item, remove it
+    if (/^[ivxlcdm]{1,6}\. /i.test(line.text)) {
+      const m = line.text.match(/^([ivxlcdm]{1,6}\. )/i)!;
+      view.dispatch({ changes: { from: line.from, to: line.from + m[1].length, insert: '' } });
+      view.focus();
+      return;
     }
-    toggleLinePrefix(getRomanPrefix(count) + ' ');
+    // Count preceding consecutive roman-list lines
+    let count = 1;
+    let lineNum = line.number - 1;
+    while (lineNum >= 1) {
+      const prev = view.state.doc.line(lineNum);
+      if (/^[ivxlcdm]{1,6}\. /i.test(prev.text)) { count++; lineNum--; } else break;
+    }
+    const prefix = getRomanPrefix(count) + ' ';
+    const stripped = line.text.replace(/^(\s*)([-*+]\s|\d+\.\s|[a-z]{1,3}\.\s|[ivxlcdm]{1,6}\.\s|- \[[ x]\] )/i, '$1');
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: prefix + stripped } });
+    view.focus();
   };
 
   const insertColor = (color: string) => {
@@ -514,10 +538,12 @@ export const Editor: React.FC<EditorProps> = ({
           theme={oneDark}
           extensions={[
             markdown({ base: markdownLanguage, codeLanguages: languages }),
+            listKeymap,
             tagPlugin,
             linkPlugin,
             calloutPlugin,
             imagePlugin,
+            alphaRomanMarkerPlugin,
             autocompletion({ override: [linkCompletion] }),
             EditorView.lineWrapping,
             pasteHandler,

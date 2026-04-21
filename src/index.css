@@ -225,3 +225,10 @@ body {
   padding: 2px;
   cursor: pointer;
 }
+
+/* Alpha / Roman numeral list marker — same colour as CodeMirror's built-in
+   bullet and numbered list markers (oneDark theme uses a muted highlight) */
+.cm-list-marker-custom {
+  color: var(--interactive-accent);
+  opacity: 0.75;
+}

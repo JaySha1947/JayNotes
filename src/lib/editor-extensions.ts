@@ -127,9 +127,10 @@ export const imagePlugin = ViewPlugin.fromClass(class {
   decorations: v => v.decorations
 });
 
-// Decorator for #tags
+// Decorator for #tags — only match #word where the # is NOT preceded by
+// another # (headings) and the character after # is a letter (not a space).
 const tagDecorator = new MatchDecorator({
-  regexp: /#[a-zA-Z0-9_-]+/g,
+  regexp: /(?<![#])#([a-zA-Z][a-zA-Z0-9_-]*)/g,
   decoration: match => Decoration.mark({ class: "cm-obsidian-tag" })
 });
 
