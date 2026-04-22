@@ -279,19 +279,21 @@ export function toggleTaskItemChecked(view: any, itemPos: number): boolean {
 }
 
 /**
- * Convert the selected line(s) to GFM task-list items.
+ * Toggle GFM task-list formatting on the selected line(s).
  *
- * Rules (idempotent / additive — never destructive):
+ * Decision logic:
+ *  • ALL blocks are already task items  → REMOVE checklist (set checked:null,
+ *    reverting to plain bullet list items).
+ *  • SOME blocks are task items         → ADD checklist to the non-task blocks
+ *    only; leave existing task items untouched.
+ *  • NO blocks are task items           → ADD checklist to all blocks.
  *
- *  • A block that is ALREADY a task item  → leave completely untouched.
- *  • A block inside a non-task list_item  → upgrade to task item via setNodeMarkup
- *    (adds checked:false without rebuilding the list structure).
- *  • A plain paragraph (not in any list)  → wrap in bullet_list > list_item{checked:false}.
- *  • If EVERY selected block is already a task item → do nothing (return false
- *    so Milkdown's default handler can run, though in practice nothing will change).
+ * For "add" operations:
+ *  - A block already inside a list_item → upgrade via setNodeMarkup (no re-wrap).
+ *  - A plain paragraph                  → wrap in bullet_list > list_item{checked:false}.
  *
- * This means clicking the checkbox button is always a safe "ensure checklist"
- * operation and can never accidentally remove checkboxes or create double-wrapped lists.
+ * For "remove" operations:
+ *  - task list_item → setNodeMarkup to set checked:null (reverts to plain bullet).
  */
 export function execInsertChecklist(view: any): boolean {
   const { state, dispatch } = view;
@@ -306,11 +308,11 @@ export function execInsertChecklist(view: any): boolean {
   // ── Classify every textblock overlapping the selection ───────────────────
   type BlockKind = 'task' | 'list-item' | 'plain';
   interface BlockInfo {
-    paraFrom: number;   // position of the paragraph node itself
+    paraFrom: number;
     paraTo: number;
-    content: any;       // paragraph's Fragment
+    content: any;
     kind: BlockKind;
-    listItemPos: number; // position of enclosing list_item (-1 if none)
+    listItemPos: number; // -1 if not inside a list_item
   }
 
   const classifyPos = (pos: number): { kind: BlockKind; listItemPos: number } => {
@@ -319,8 +321,10 @@ export function execInsertChecklist(view: any): boolean {
       const n = $p.node(d);
       if (n.type === listItemType) {
         const liPos = $p.before(d);
-        if (n.attrs.checked != null) return { kind: 'task', listItemPos: liPos };
-        return { kind: 'list-item', listItemPos: liPos };
+        return {
+          kind: n.attrs.checked != null ? 'task' : 'list-item',
+          listItemPos: liPos,
+        };
       }
     }
     return { kind: 'plain', listItemPos: -1 };
@@ -336,7 +340,7 @@ export function execInsertChecklist(view: any): boolean {
     return true;
   });
 
-  // Cursor-only fallback (empty selection inside a single block)
+  // Cursor-only fallback: selection collapsed inside a single textblock
   if (blocks.length === 0) {
     const $from = state.doc.resolve(from);
     if ($from.parent.isTextblock) {
@@ -352,41 +356,52 @@ export function execInsertChecklist(view: any): boolean {
 
   if (blocks.length === 0) return false;
 
-  // If everything is already a task item, there is nothing to do
-  if (blocks.every(b => b.kind === 'task')) return false;
+  // ── Decide: add or remove? ────────────────────────────────────────────────
+  const allTask = blocks.every(b => b.kind === 'task');
 
-  // ── Build transaction ─────────────────────────────────────────────────────
-  // Process in reverse document order so earlier positions stay valid.
+  // ── Build transaction (reverse order preserves positions) ─────────────────
   let tr = state.tr;
 
-  for (const b of [...blocks].reverse()) {
-    if (b.kind === 'task') {
-      // Already a task item — skip entirely, do NOT touch it
-      continue;
-    }
-
-    if (b.kind === 'list-item' && b.listItemPos >= 0) {
-      // Already inside a list_item but not a task — upgrade via setNodeMarkup.
-      // This adds checked:false without touching the surrounding list structure.
-      const liNode = tr.doc.nodeAt(tr.mapping.map(b.listItemPos));
+  if (allTask) {
+    // REMOVE: revert all task items to plain bullet list items
+    for (const b of [...blocks].reverse()) {
+      if (b.kind !== 'task' || b.listItemPos < 0) continue;
+      const mappedPos = tr.mapping.map(b.listItemPos);
+      const liNode = tr.doc.nodeAt(mappedPos);
       if (liNode && liNode.type === listItemType) {
-        tr = tr.setNodeMarkup(tr.mapping.map(b.listItemPos), undefined, {
+        tr = tr.setNodeMarkup(mappedPos, undefined, {
           ...liNode.attrs,
-          checked: false,
+          checked: null,
         });
       }
-      continue;
     }
+  } else {
+    // ADD: convert only non-task blocks to task items
+    for (const b of [...blocks].reverse()) {
+      if (b.kind === 'task') continue; // leave existing task items alone
 
-    // Plain paragraph — wrap in a new bullet_list > list_item{checked:false}
-    // Use fresh $from so positions reflect any prior changes in this tr
-    const resolvedFrom = state.doc.resolve(b.paraFrom + 1);
-    const blockStart = resolvedFrom.start(resolvedFrom.depth);
-    const blockEnd   = resolvedFrom.end(resolvedFrom.depth);
-    const para = paragraphType.create(null, b.content);
-    const item = listItemType.create({ checked: false }, para);
-    const list = bulletListType.create(null, item);
-    tr = tr.replaceWith(blockStart - 1, blockEnd + 1, list);
+      if (b.kind === 'list-item' && b.listItemPos >= 0) {
+        // Upgrade plain list_item → task item (no structural change)
+        const mappedPos = tr.mapping.map(b.listItemPos);
+        const liNode = tr.doc.nodeAt(mappedPos);
+        if (liNode && liNode.type === listItemType) {
+          tr = tr.setNodeMarkup(mappedPos, undefined, {
+            ...liNode.attrs,
+            checked: false,
+          });
+        }
+        continue;
+      }
+
+      // Plain paragraph → wrap in bullet_list > list_item{checked:false}
+      const $para = state.doc.resolve(b.paraFrom + 1);
+      const blockStart = $para.start($para.depth);
+      const blockEnd   = $para.end($para.depth);
+      const para = paragraphType.create(null, b.content);
+      const item = listItemType.create({ checked: false }, para);
+      const list = bulletListType.create(null, item);
+      tr = tr.replaceWith(blockStart - 1, blockEnd + 1, list);
+    }
   }
 
   if (tr.steps.length === 0) return false;

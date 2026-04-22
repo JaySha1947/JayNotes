@@ -1118,12 +1118,12 @@ html.light .jn-tree-action-btn:hover {
   bottom: 4px;
   left: var(--connector-left, 8px);
   width: 1px;
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.18);
   pointer-events: none;
 }
 
 html.light .jn-tree-children::before {
-  background: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.18);
 }
 
 /* Root-level items have no connector */
