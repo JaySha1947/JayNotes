@@ -280,8 +280,23 @@ export function toggleTaskItemChecked(view: any, itemPos: number): boolean {
 
 /**
  * Insert GFM task-list items for the current selection.
- * If the cursor is already inside a task-list item, convert it back to a
- * plain paragraph inside a regular bullet list (toggle-off behaviour).
+ *
+ * Behavior (matches Obsidian / VS Code):
+ *
+ * 1. Analyse every text block (paragraph) in the selection to determine
+ *    which are already task-list items and which are not.
+ *
+ * 2. If ALL selected blocks are already task items → do nothing (idempotent).
+ *    The button is not a toggle-off; clicking it again on existing checkboxes
+ *    should not remove them.
+ *
+ * 3. If SOME blocks are task items and others are not → convert only the
+ *    non-task blocks to task items. Leave existing task items untouched.
+ *
+ * 4. If NO blocks are task items → convert all to task items.
+ *
+ * This makes the button a reliable "ensure checklist" operation, never an
+ * accidental "remove checklist" operation.
  */
 export function execInsertChecklist(view: any): boolean {
   const { state, dispatch } = view;
@@ -293,52 +308,113 @@ export function execInsertChecklist(view: any): boolean {
   const paragraphType  = schema.nodes.paragraph;
   if (!bulletListType || !listItemType || !paragraphType) return false;
 
-  // ── Toggle-off: if cursor is already in a task item, un-task it ──────────
-  const taskItem = getTaskItemAt(state, from);
-  if (taskItem) {
-    let tr = state.tr;
-    let changed = false;
-    state.doc.nodesBetween(from, to, (node: any, pos: number) => {
-      if (node.type === listItemType && node.attrs.checked != null) {
-        tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: null });
-        changed = true;
-      }
-    });
-    if (changed) { dispatch(tr.scrollIntoView()); return true; }
+  // ── Step 1: collect all textblocks in the selection ──────────────────────
+  // Each entry records the block position, its content, and whether it is
+  // already a task-list item (checked != null on its parent list_item).
+  interface BlockInfo {
+    from: number;         // pos of the textblock node
+    to: number;           // pos + nodeSize
+    content: any;         // Fragment — the paragraph content
+    isTask: boolean;      // already a GFM task item?
+    listItemPos: number;  // pos of enclosing list_item, or -1
   }
 
-  // ── Insert: collect text blocks in the selection ─────────────────────────
-  const blocks: { from: number; to: number; content: any }[] = [];
+  const blocks: BlockInfo[] = [];
+
+  // Helper: check if a position is inside a task list_item
+  const isInsideTask = (pos: number): boolean => {
+    const $p = state.doc.resolve(pos);
+    for (let d = $p.depth; d > 0; d--) {
+      const n = $p.node(d);
+      if (n.type === listItemType) return n.attrs.checked != null;
+    }
+    return false;
+  };
+
+  // Helper: find enclosing list_item pos for a textblock pos
+  const enclosingListItemPos = (pos: number): number => {
+    const $p = state.doc.resolve(pos);
+    for (let d = $p.depth; d > 0; d--) {
+      if ($p.node(d).type === listItemType) return $p.before(d);
+    }
+    return -1;
+  };
+
+  // Walk all textblocks that overlap the selection
   state.doc.nodesBetween(from, to, (node: any, pos: number) => {
     if (node.isTextblock) {
-      blocks.push({ from: pos, to: pos + node.nodeSize, content: node.content });
-      return false;
+      const isTask = isInsideTask(pos + 1);
+      const liPos  = enclosingListItemPos(pos + 1);
+      blocks.push({ from: pos, to: pos + node.nodeSize, content: node.content, isTask, listItemPos: liPos });
+      return false; // don't descend further
     }
     return true;
   });
 
-  // Single-block / no-selection fallback
+  // Cursor-only fallback: if nodesBetween found nothing (cursor inside an
+  // empty paragraph that starts at `from`), sample $from.parent directly.
   if (blocks.length === 0) {
     const $from = state.doc.resolve(from);
     const blockNode = $from.parent;
-    const blockStart = $from.start($from.depth);
-    const blockEnd   = $from.end($from.depth);
-    const para = paragraphType.create(null, blockNode.content);
-    const item = listItemType.create({ checked: false }, para);
-    const list = bulletListType.create(null, item);
-    const tr = state.tr.replaceWith(blockStart - 1, blockEnd + 1, list);
-    dispatch(tr.scrollIntoView());
-    return true;
+    if (blockNode.isTextblock) {
+      const blockStart = $from.start($from.depth);
+      const isTask = isInsideTask(from);
+      const liPos  = enclosingListItemPos(from);
+      blocks.push({
+        from: blockStart - 1, // include the opening token
+        to: $from.end($from.depth) + 1, // include the closing token
+        content: blockNode.content,
+        isTask,
+        listItemPos: liPos,
+      });
+    }
   }
 
-  // Multi-block: replace each block in reverse so positions stay valid
+  if (blocks.length === 0) return false;
+
+  // ── Step 2: decide what to do ────────────────────────────────────────────
+  const allTask  = blocks.every(b => b.isTask);
+  const noneTask = blocks.every(b => !b.isTask);
+  const mixed    = !allTask && !noneTask;
+
+  // All already task items → idempotent, do nothing
+  if (allTask) return false;
+
+  // ── Step 3: convert non-task blocks to task items ─────────────────────────
+  // We only touch blocks where isTask === false.
+  // Build the transaction in reverse document order so that earlier positions
+  // remain valid as we replace content.
+  const toConvert = blocks.filter(b => !b.isTask);
+
+  // For single-block cursor case we stored adjusted from/to (with tokens);
+  // for the normal multi-block case `from`/`to` are textblock-node positions.
+  // Detect which case we're in.
+  const isCursorFallback = blocks.length === 1 && blocks[0].from < blocks[0].to &&
+    state.doc.resolve(blocks[0].from).depth === 0 || // heuristic
+    (blocks.length === 1 && blocks[0].listItemPos === -1 && !blocks[0].isTask);
+
   let tr = state.tr;
-  for (const block of [...blocks].reverse()) {
-    const para = paragraphType.create(null, block.content);
+
+  if (isCursorFallback && toConvert.length === 1) {
+    // Simple cursor case: wrap the current paragraph in a task list_item
+    const b = toConvert[0];
+    const $from = state.doc.resolve(from);
+    const blockStart = $from.start($from.depth);
+    const blockEnd   = $from.end($from.depth);
+    const para = paragraphType.create(null, $from.parent.content);
     const item = listItemType.create({ checked: false }, para);
     const list = bulletListType.create(null, item);
-    tr = tr.replaceWith(block.from, block.to, list);
+    tr = tr.replaceWith(blockStart - 1, blockEnd + 1, list);
+  } else {
+    // General case: process each non-task block individually, reverse order
+    for (const b of [...toConvert].reverse()) {
+      const para = paragraphType.create(null, b.content);
+      const item = listItemType.create({ checked: false }, para);
+      const list = bulletListType.create(null, item);
+      tr = tr.replaceWith(b.from, b.to, list);
+    }
   }
+
   dispatch(tr.scrollIntoView());
   return true;
 }
