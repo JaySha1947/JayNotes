@@ -864,3 +864,233 @@ html.light .jn-table-ctrl-btn:hover {
   background: var(--interactive-hover);
   color: var(--text-normal);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Obsidian-style File Tree  (jn-tree-*)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Row ─────────────────────────────────────────────────────────────────── */
+.jn-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-right: 6px;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  border-left: 2px solid transparent;
+  transition: background 0.08s, border-color 0.08s;
+  min-width: 0;
+  border-radius: 0;
+}
+
+.jn-tree-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+html.light .jn-tree-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Active / selected file row */
+.jn-tree-row--active {
+  background: rgba(0, 200, 130, 0.08) !important;
+  border-left-color: var(--interactive-accent) !important;
+}
+
+/* Drag-over folder */
+.jn-tree-row--dragover {
+  background: rgba(0, 200, 130, 0.12) !important;
+  outline: 1px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
+
+/* ── Chevron (folder expand/collapse) ────────────────────────────────────── */
+.jn-tree-chevron {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.3);
+  transition: transform 0.15s ease, color 0.1s;
+  width: 14px;
+}
+
+html.light .jn-tree-chevron {
+  color: rgba(0, 0, 0, 0.3);
+}
+
+.jn-tree-chevron--open {
+  transform: rotate(90deg);
+  color: rgba(255, 255, 255, 0.45);
+}
+
+html.light .jn-tree-chevron--open {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.jn-tree-row:hover .jn-tree-chevron {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+html.light .jn-tree-row:hover .jn-tree-chevron {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* ── File dot spacer (aligns file names with folder names) ───────────────── */
+.jn-tree-file-dot {
+  display: inline-block;
+  width: 14px;
+  flex-shrink: 0;
+}
+
+/* ── Name label ──────────────────────────────────────────────────────────── */
+.jn-tree-name {
+  font-size: 13px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1;
+  min-width: 0;
+  transition: color 0.08s;
+}
+
+html.light .jn-tree-name {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+/* Folder names slightly brighter */
+.jn-tree-name--folder {
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 400;
+}
+
+html.light .jn-tree-name--folder {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* Hover — bump brightness */
+.jn-tree-row:hover .jn-tree-name {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+html.light .jn-tree-row:hover .jn-tree-name {
+  color: rgba(0, 0, 0, 0.8);
+}
+
+/* Active file — full accent */
+.jn-tree-name--active {
+  color: var(--interactive-accent) !important;
+  font-weight: 500;
+}
+
+/* ── Badges & decorations ────────────────────────────────────────────────── */
+.jn-tree-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 200, 130, 0.15);
+  color: var(--interactive-accent);
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.jn-tree-bookmark {
+  font-size: 8px;
+  color: var(--interactive-accent);
+  opacity: 0.7;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+/* ── Hover action buttons ────────────────────────────────────────────────── */
+.jn-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  flex-shrink: 0;
+}
+
+.jn-tree-row:hover .jn-tree-actions {
+  opacity: 1;
+}
+
+.jn-tree-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+html.light .jn-tree-action-btn {
+  color: rgba(0, 0, 0, 0.3);
+}
+
+.jn-tree-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+html.light .jn-tree-action-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.jn-tree-action-btn--danger:hover {
+  background: rgba(244, 63, 94, 0.12) !important;
+  color: #f43f5e !important;
+}
+
+/* ── Inline folder-name input ────────────────────────────────────────────── */
+.jn-tree-inline-input {
+  flex-grow: 1;
+  min-width: 0;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--interactive-accent);
+  border-radius: 3px;
+  color: var(--text-normal);
+  padding: 1px 5px;
+  outline: none;
+}
+
+/* ── Children container with vertical connector line ─────────────────────── */
+.jn-tree-children {
+  position: relative;
+}
+
+/* The vertical connector line — runs from top to bottom of children block */
+.jn-tree-children::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 4px;
+  left: var(--connector-left, 8px);
+  width: 1px;
+  background: rgba(255, 255, 255, 0.09);
+  pointer-events: none;
+}
+
+html.light .jn-tree-children::before {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Root-level items have no connector */
+.jn-tree-item-root {
+  position: relative;
+}
+

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Folder, File, ChevronRight, ChevronDown, FolderPlus, ArrowUpDown, LayoutGrid, FilePlus2, SquarePlus, Copy, Trash2 } from 'lucide-react';
+import { ChevronRight, FolderPlus, ArrowUpDown, LayoutGrid, FilePlus2, SquarePlus, Copy, Trash2 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { PromptModal } from './PromptModal';
 
@@ -17,6 +17,9 @@ interface FileExplorerProps {
   refreshTrigger?: number;
   bookmarks?: string[];
 }
+
+const INDENT = 16; // px per depth level
+const CONNECTOR_LEFT_OFFSET = 8; // px — where the vertical line sits within each depth
 
 const FileTreeItem: React.FC<{
   node: FileNode;
@@ -37,6 +40,7 @@ const FileTreeItem: React.FC<{
   const [isDragOver, setIsDragOver] = useState(false);
   const isFolder = node.type === 'folder';
   const isActive = activeFile === node.path;
+  const hasChildren = isFolder && node.children && node.children.length > 0;
 
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', node.path);
@@ -44,128 +48,114 @@ const FileTreeItem: React.FC<{
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (isFolder) {
-      e.preventDefault();
-      setIsDragOver(true);
-      e.stopPropagation();
-    }
+    if (isFolder) { e.preventDefault(); setIsDragOver(true); e.stopPropagation(); }
   };
-
   const handleDragLeave = (e: React.DragEvent) => {
-    if (isFolder) {
-      setIsDragOver(false);
-      e.stopPropagation();
-    }
+    if (isFolder) { setIsDragOver(false); e.stopPropagation(); }
   };
-
   const handleDrop = (e: React.DragEvent) => {
     if (isFolder) {
-      e.preventDefault();
-      setIsDragOver(false);
-      e.stopPropagation();
+      e.preventDefault(); setIsDragOver(false); e.stopPropagation();
       const sourcePath = e.dataTransfer.getData('text/plain');
       if (sourcePath && sourcePath !== node.path) {
         const fileName = sourcePath.split('/').pop();
         const destPath = node.path ? `${node.path}/${fileName}` : fileName;
-        if (destPath) {
-          onMoveFile(sourcePath, destPath);
-        }
+        if (destPath) onMoveFile(sourcePath, destPath);
       }
     }
   };
 
+  // Indentation: left padding = level * INDENT + base
+  const rowPaddingLeft = level * INDENT + 6;
+  // The connector line for THIS node's children sits at: level * INDENT + CONNECTOR_LEFT_OFFSET
+  const childConnectorLeft = level * INDENT + CONNECTOR_LEFT_OFFSET;
+
   return (
-    <div>
+    <div className="jn-tree-item-root">
+      {/* Row */}
       <div
         draggable
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`group flex items-center py-1 px-2 cursor-pointer select-none text-sm hover:bg-interactive-hover min-w-0 ${
-          isActive ? 'bg-interactive-hover text-interactive-accent' : 'text-text-normal'
-        } ${isDragOver ? 'bg-interactive-hover ring-1 ring-interactive-accent' : ''}`}
-        style={{ paddingLeft: `${level * 12 + 8}px` }}
+        className={`jn-tree-row group${isActive ? ' jn-tree-row--active' : ''}${isDragOver ? ' jn-tree-row--dragover' : ''}`}
+        style={{ paddingLeft: `${rowPaddingLeft}px` }}
         onClick={() => {
           if (isFolder) {
             setIsOpen(!isOpen);
             onFolderSelect(node.path);
           } else {
             onSelectFile(node.path);
-            // Select parent folder so new notes go in the right place
             const parent = node.path.includes('/') ? node.path.split('/').slice(0, -1).join('/') : '';
             onFolderSelect(parent);
           }
         }}
         onContextMenu={(e) => onContextMenu(e, node.path, isFolder)}
       >
+        {/* Chevron (folders) or spacer (files) */}
         {isFolder ? (
-          isOpen ? <ChevronDown size={14} className="mr-1 text-text-muted flex-shrink-0" /> : <ChevronRight size={14} className="mr-1 text-text-muted flex-shrink-0" />
-        ) : node.type === 'canvas' ? (
-          <LayoutGrid size={14} className="mr-1 text-text-muted flex-shrink-0" />
+          <span className={`jn-tree-chevron${isOpen ? ' jn-tree-chevron--open' : ''}`}>
+            <ChevronRight size={11} />
+          </span>
         ) : (
-          <File size={14} className="mr-1 text-text-muted flex-shrink-0" />
+          <span className="jn-tree-file-dot" />
         )}
-        <span className="truncate min-w-0 flex-grow">{node.name}</span>
+
+        {/* Name */}
+        <span className={`jn-tree-name${isFolder ? ' jn-tree-name--folder' : ''}${isActive ? ' jn-tree-name--active' : ''}`}>
+          {node.name}
+        </span>
+
+        {/* Canvas badge */}
         {node.type === 'canvas' && (
-          <span className="ml-2 px-1 py-0.5 text-[10px] font-bold bg-interactive-accent/20 text-interactive-accent rounded leading-none mr-2">CANVAS</span>
+          <span className="jn-tree-badge">CANVAS</span>
         )}
+
+        {/* Bookmark dot */}
         {!isFolder && bookmarks?.includes(node.path) && (
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-interactive-accent flex-shrink-0 mr-2"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+          <span className="jn-tree-bookmark" title="Bookmarked">●</span>
         )}
-        
+
+        {/* File actions (hover) */}
         {!isFolder && (
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDuplicateFile?.(node.path);
-              }}
-              className="p-1 hover:bg-bg-secondary hover:text-text-normal text-text-muted rounded"
-              title="Duplicate File"
-            >
-              <Copy size={12} />
+          <span className="jn-tree-actions">
+            <button onClick={e => { e.stopPropagation(); onDuplicateFile?.(node.path); }} title="Duplicate" className="jn-tree-action-btn">
+              <Copy size={11} />
             </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteFile?.(node.path);
-              }}
-              className="p-1 hover:bg-error/10 hover:text-error text-text-muted rounded"
-              title="Delete File"
-            >
-              <Trash2 size={12} />
+            <button onClick={e => { e.stopPropagation(); onDeleteFile?.(node.path); }} title="Delete" className="jn-tree-action-btn jn-tree-action-btn--danger">
+              <Trash2 size={11} />
             </button>
-          </div>
+          </span>
         )}
       </div>
+
+      {/* Children + vertical connector line */}
       {isFolder && isOpen && (
-        <div>
+        <div
+          className="jn-tree-children"
+          style={{ '--connector-left': `${childConnectorLeft}px` } as React.CSSProperties}
+        >
+          {/* Inline folder-create input */}
           {inlineCreate === node.path && (
-            <div className="flex items-center py-1 px-2 text-sm" style={{ paddingLeft: `${(level + 1) * 12 + 8}px` }}>
-              <Folder size={14} className="mr-1 text-text-muted flex-shrink-0" />
-              <input 
+            <div className="jn-tree-row" style={{ paddingLeft: `${(level + 1) * INDENT + 6}px` }}>
+              <span className="jn-tree-file-dot" />
+              <input
                 autoFocus
                 type="text"
-                className="bg-bg-secondary border border-interactive-accent outline-none text-text-normal px-1 py-0.5 rounded w-full"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onInlineCreateSubmit?.(e.currentTarget.value);
-                  } else if (e.key === 'Escape') {
-                    onInlineCreateCancel?.();
-                  }
+                className="jn-tree-inline-input"
+                onKeyDown={e => {
+                  if (e.key === 'Enter') onInlineCreateSubmit?.(e.currentTarget.value);
+                  else if (e.key === 'Escape') onInlineCreateCancel?.();
                 }}
-                onBlur={(e) => {
-                  if (e.currentTarget.value) {
-                    onInlineCreateSubmit?.(e.currentTarget.value);
-                  } else {
-                    onInlineCreateCancel?.();
-                  }
+                onBlur={e => {
+                  if (e.currentTarget.value) onInlineCreateSubmit?.(e.currentTarget.value);
+                  else onInlineCreateCancel?.();
                 }}
               />
             </div>
           )}
-          {node.children && node.children.map((child) => (
+          {node.children && node.children.map(child => (
             <FileTreeItem
               key={child.path}
               node={child}
@@ -188,6 +178,7 @@ const FileTreeItem: React.FC<{
     </div>
   );
 };
+
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCreateFile, activeFile, refreshTrigger = 0, bookmarks }) => {
   const [files, setFiles] = useState<FileNode[]>([]);
@@ -482,12 +473,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
         </div>
       </div>
       {inlineCreate === '' && (
-        <div className="flex items-center py-1 px-2 text-sm" style={{ paddingLeft: '8px' }}>
-          <Folder size={14} className="mr-1 text-text-muted flex-shrink-0" />
-          <input 
+        <div className="jn-tree-row" style={{ paddingLeft: '6px' }}>
+          <span className="jn-tree-file-dot" />
+          <input
             autoFocus
             type="text"
-            className="bg-bg-secondary border border-interactive-accent outline-none text-text-normal px-1 py-0.5 rounded w-full"
+            className="jn-tree-inline-input"
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 handleInlineCreateSubmit(e.currentTarget.value);
