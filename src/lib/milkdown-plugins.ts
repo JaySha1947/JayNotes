@@ -5,7 +5,7 @@
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import { $prose } from '@milkdown/utils';
-import { wrapInList, liftListItem } from 'prosemirror-schema-list';
+import { wrapInList, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 
 // ─── Callback for opening a file (set by the React component) ────────────────
 let _onOpenFile: ((path: string) => void) | null = null;
@@ -391,3 +391,174 @@ export const checkboxClickPlugin = $prose(() => {
     },
   });
 });
+
+// ─── Multi-item list indentation (Tab / Shift+Tab) ───────────────────────────
+//
+// Milkdown's built-in listItemKeymap binds Tab→sinkListItemCommand and
+// Shift-Tab→liftListItemCommand, but prosemirror-schema-list's sinkListItem /
+// liftListItem only operate on the single item containing $from. This plugin
+// intercepts Tab/Shift+Tab BEFORE the built-in handler and processes every
+// list_item node that overlaps the selection, enabling true multi-item indent.
+//
+// It runs as a ProseMirror plugin with a key handler that returns `true`
+// (consumed) when it acts, so the default handler never fires.
+
+export const listTabPlugin = $prose(() => {
+  const key = new PluginKey('jn-list-tab');
+
+  return new Plugin({
+    key,
+    props: {
+      handleKeyDown(view, event) {
+        // Only intercept Tab and Shift+Tab
+        if (event.key !== 'Tab') return false;
+        // Don't steal Tab from the wikilink autocomplete dropdown
+        // (that handler is registered with `capture:true` and runs first —
+        // if it consumed the event it wouldn't reach here, but guard anyway)
+
+        const { state, dispatch } = view;
+        const { $from, $to } = state.selection;
+        const listItemType = state.schema.nodes.list_item;
+        if (!listItemType) return false;
+
+        // Check whether selection touches any list item
+        let inList = false;
+        state.doc.nodesBetween($from.pos, $to.pos, (node) => {
+          if (node.type === listItemType) { inList = true; return false; }
+          return true;
+        });
+        if (!inList) return false;
+
+        event.preventDefault();
+
+        if (event.shiftKey) {
+          return liftMultipleListItems(state, dispatch, listItemType);
+        } else {
+          return sinkMultipleListItems(state, dispatch, listItemType);
+        }
+      },
+    },
+  });
+});
+
+/**
+ * Robust multi-item sink/lift.
+ *
+ * Strategy: rather than trying to map steps across accumulating transactions
+ * (which breaks for ReplaceAroundStep whose mapped positions may become
+ * invalid), we apply each individual sink/lift to a FRESH state derived from
+ * the accumulated transaction, collect the steps it produced, append those
+ * steps to our main tr, then derive the next state from that.
+ *
+ * Items are processed bottom-up for sink (so earlier positions stay valid
+ * after the deeper items are wrapped) and top-down for lift.
+ */
+
+function applyToEachItem(
+  state: any,
+  dispatch: any,
+  listItemType: any,
+  ascending: boolean,
+  operation: (itemState: any, itemDispatch: any) => boolean,
+): boolean {
+  const { $from, $to } = state.selection;
+
+  // Collect positions of all list_item nodes overlapping the selection
+  const positions: number[] = [];
+  state.doc.nodesBetween($from.pos, $to.pos, (node: any, pos: number) => {
+    if (node.type === listItemType) {
+      positions.push(pos);
+      return false; // don't descend further
+    }
+    return true;
+  });
+
+  if (positions.length === 0) return false;
+  // Single item — use the operation directly so built-in edge-case handling works
+  if (positions.length === 1) {
+    const selNear = state.selection.constructor.near(state.doc.resolve(positions[0] + 1));
+    const singleState = state.apply(state.tr.setSelection(selNear));
+    return operation(singleState, dispatch);
+  }
+
+  const ordered = ascending ? [...positions].sort((a, b) => a - b) : [...positions].sort((a, b) => b - a);
+
+  // We'll build a single transaction by applying state changes cumulatively
+  // using state.apply(tr) after each item.
+  let currentState = state;
+  let finalTr = state.tr; // accumulates mapping only (we append real steps below)
+  let anyWorked = false;
+
+  // We need to track the *latest* applied transaction to pass to dispatch
+  let latestAppliedState = state;
+
+  for (const origPos of ordered) {
+    // Map the original position through all changes so far
+    const mappedPos = finalTr.mapping.map(origPos);
+
+    // Find the list_item at mappedPos in currentState.doc
+    let itemPos: number | null = null;
+    currentState.doc.nodesBetween(mappedPos, mappedPos + 2, (node: any, pos: number) => {
+      if (node.type === listItemType && itemPos === null) {
+        itemPos = pos;
+        return false;
+      }
+      return true;
+    });
+    if (itemPos === null) continue;
+
+    // Set cursor inside this item and run the operation
+    const $item = currentState.doc.resolve(itemPos + 1);
+    const selInItem = currentState.selection.constructor.near($item);
+    const itemState = currentState.apply(currentState.tr.setSelection(selInItem));
+
+    let itemTr: any = null;
+    const itemDispatch = (t: any) => { itemTr = t; };
+    const worked = operation(itemState, itemDispatch);
+
+    if (worked && itemTr && itemTr.steps.length > 0) {
+      anyWorked = true;
+      // Apply this transaction to advance currentState
+      const nextState = itemState.apply(itemTr);
+      // Update our mapping: compose finalTr.mapping with itemTr.mapping
+      // We do this by appending the steps to our final transaction
+      for (const step of itemTr.steps) {
+        try {
+          finalTr = finalTr.step(step);
+        } catch (_) {
+          // step couldn't apply — skip (position already shifted)
+        }
+      }
+      currentState = nextState;
+      latestAppliedState = nextState;
+    }
+  }
+
+  if (anyWorked && dispatch) {
+    dispatch(finalTr.scrollIntoView());
+    return true;
+  }
+
+  return false;
+}
+
+function sinkMultipleListItems(state: any, dispatch: any, listItemType: any): boolean {
+  const worked = applyToEachItem(state, dispatch, listItemType, false, // bottom-up
+    (s: any, d: any) => sinkListItem(listItemType)(s, d) ?? false
+  );
+  if (!worked) {
+    // Fallback to native single-item sink
+    return sinkListItem(listItemType)(state, dispatch) ?? false;
+  }
+  return worked;
+}
+
+function liftMultipleListItems(state: any, dispatch: any, listItemType: any): boolean {
+  const worked = applyToEachItem(state, dispatch, listItemType, true, // top-down
+    (s: any, d: any) => liftListItem(listItemType)(s, d) ?? false
+  );
+  if (!worked) {
+    return liftListItem(listItemType)(state, dispatch) ?? false;
+  }
+  return worked;
+}

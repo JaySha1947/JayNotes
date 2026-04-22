@@ -486,20 +486,57 @@ body {
   color: var(--interactive-accent) !important;
 }
 
-/* Nested lists */
+/* ── Nested list style cycling ───────────────────────────────────────────────
+   Ordered lists cycle: decimal (1) → lower-alpha (a) → lower-roman (i) → repeat
+   Bullet  lists cycle: disc → circle → square → disc → repeat
+   We cover 8 levels of depth which handles any realistic document.            */
+
+/* ── Bullet list nesting ─────────────────────────────────────────── */
+/* Level 2 */
 .milkdown-wrapper .editor ul ul,
-.milkdown-wrapper .editor ol ul {
-  list-style: circle !important;
-  margin: 1px 0 !important;
-}
+.milkdown-wrapper .editor ol ul  { list-style: circle !important; margin: 0 !important; }
+/* Level 3 */
 .milkdown-wrapper .editor ul ul ul,
-.milkdown-wrapper .editor ol ol ul {
-  list-style: square !important;
-}
-.milkdown-wrapper .editor ol ol {
-  list-style: lower-alpha !important;
-  margin: 1px 0 !important;
-}
+.milkdown-wrapper .editor ol ul ul,
+.milkdown-wrapper .editor ul ol ul,
+.milkdown-wrapper .editor ol ol ul  { list-style: square !important; }
+/* Level 4 — reset to disc */
+.milkdown-wrapper .editor ul ul ul ul,
+.milkdown-wrapper .editor ul ol ul ul,
+.milkdown-wrapper .editor ol ul ul ul,
+.milkdown-wrapper .editor ol ol ul ul  { list-style: disc !important; }
+/* Level 5 */
+.milkdown-wrapper .editor ul ul ul ul ul  { list-style: circle !important; }
+/* Level 6 */
+.milkdown-wrapper .editor ul ul ul ul ul ul  { list-style: square !important; }
+/* Level 7 */
+.milkdown-wrapper .editor ul ul ul ul ul ul ul  { list-style: disc !important; }
+/* Level 8 */
+.milkdown-wrapper .editor ul ul ul ul ul ul ul ul  { list-style: circle !important; }
+
+/* ── Ordered list nesting: decimal → lower-alpha → lower-roman → decimal … ── */
+/* Level 1 — decimal (set on .editor ol already above) */
+/* Level 2 */
+.milkdown-wrapper .editor ol ol,
+.milkdown-wrapper .editor ul ol   { list-style: lower-alpha !important; margin: 0 !important; }
+/* Level 3 */
+.milkdown-wrapper .editor ol ol ol,
+.milkdown-wrapper .editor ul ol ol,
+.milkdown-wrapper .editor ol ul ol,
+.milkdown-wrapper .editor ul ul ol  { list-style: lower-roman !important; }
+/* Level 4 — decimal */
+.milkdown-wrapper .editor ol ol ol ol,
+.milkdown-wrapper .editor ul ul ol ol,
+.milkdown-wrapper .editor ul ol ol ol,
+.milkdown-wrapper .editor ol ul ol ol  { list-style: decimal !important; }
+/* Level 5 — lower-alpha */
+.milkdown-wrapper .editor ol ol ol ol ol  { list-style: lower-alpha !important; }
+/* Level 6 — lower-roman */
+.milkdown-wrapper .editor ol ol ol ol ol ol  { list-style: lower-roman !important; }
+/* Level 7 — decimal */
+.milkdown-wrapper .editor ol ol ol ol ol ol ol  { list-style: decimal !important; }
+/* Level 8 — lower-alpha */
+.milkdown-wrapper .editor ol ol ol ol ol ol ol ol  { list-style: lower-alpha !important; }
 
 /* ── Task / checklist items ──────────────────────────────────────────────── */
 

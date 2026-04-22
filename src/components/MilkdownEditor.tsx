@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
-  tagDecoratorPlugin, wikilinkPlugin, checkboxClickPlugin,
+  tagDecoratorPlugin, wikilinkPlugin, checkboxClickPlugin, listTabPlugin,
   setWikilinkFileList, setOpenFileCallback,
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
@@ -250,6 +250,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(trailing)
       .use(columnResizingPlugin)
       .use(resizableImageView)
+      .use(listTabPlugin)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
       .use(checkboxClickPlugin),
