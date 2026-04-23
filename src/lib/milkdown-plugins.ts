@@ -357,16 +357,26 @@ export function execInsertChecklist(view: any): boolean {
   let tr = state.tr;
 
   if (allTask) {
-    // REMOVE: strip checked attr from every task item → reverts to plain bullet
-    for (const b of [...blocks].reverse()) {
-      if (b.kind !== 'task' || b.listItemPos < 0) continue;
+    // REMOVE: lift each task item out of the list entirely → plain paragraph.
+    // We call liftTopLevelListItem for each item (top-down so positions stay valid).
+    // Process top-down (ascending pos) when lifting.
+    const sortedAsc = [...blocks].filter(b => b.kind === 'task' && b.listItemPos >= 0)
+      .sort((a, b) => a.listItemPos - b.listItemPos);
+    for (const b of sortedAsc) {
+      const tempState = state.apply(tr);
       const mappedPos = tr.mapping.map(b.listItemPos);
-      const liNode = tr.doc.nodeAt(mappedPos);
-      if (liNode && liNode.type === listItemType) {
-        tr = tr.setNodeMarkup(mappedPos, undefined, {
-          ...liNode.attrs,
-          checked: null,
-        });
+      // Set selection inside this list_item so liftTopLevelListItem can find it
+      let resolvedPos: any;
+      try { resolvedPos = tempState.doc.resolve(mappedPos + 1); }
+      catch (_) { continue; }
+      const sel = tempState.selection.constructor.near(resolvedPos);
+      const itemState = tempState.apply(tempState.tr.setSelection(sel));
+      let itemTr: any = null;
+      liftTopLevelListItem(itemState, (t: any) => { itemTr = t; }, listItemType);
+      if (itemTr && itemTr.steps.length > 0) {
+        for (const step of itemTr.steps) {
+          try { tr = tr.step(step); } catch (_) {}
+        }
       }
     }
   } else {
@@ -467,36 +477,93 @@ export const listTabPlugin = $prose(() => {
     key,
     props: {
       handleKeyDown(view, event) {
-        // Only intercept Tab and Shift+Tab
         if (event.key !== 'Tab') return false;
-        // Don't steal Tab from the wikilink autocomplete dropdown
-        // (that handler is registered with `capture:true` and runs first —
-        // if it consumed the event it wouldn't reach here, but guard anyway)
 
         const { state, dispatch } = view;
         const { $from, $to } = state.selection;
-        const listItemType = state.schema.nodes.list_item;
-        if (!listItemType) return false;
+        const schema = state.schema;
+        const listItemType = schema.nodes.list_item;
+        const paragraphType = schema.nodes.paragraph;
 
-        // Check whether selection touches any list item
-        let inList = false;
-        state.doc.nodesBetween($from.pos, $to.pos, (node) => {
-          if (node.type === listItemType) { inList = true; return false; }
-          return true;
-        });
-        if (!inList) return false;
+        // ── Case 1: plain text (not in any list) ─────────────────────────────
+        // Tab inserts two spaces. Shift+Tab does nothing in plain text.
+        if (listItemType) {
+          let inList = false;
+          state.doc.nodesBetween($from.pos, $to.pos, (node) => {
+            if (node.type === listItemType) { inList = true; return false; }
+            return true;
+          });
+          // Also check $from.parent ancestry (collapsed cursor)
+          if (!inList) {
+            for (let d = $from.depth; d > 0; d--) {
+              if ($from.node(d).type === listItemType) { inList = true; break; }
+            }
+          }
+
+          if (!inList) {
+            if (event.shiftKey) return false; // let browser handle
+            // Insert 2-space indent at cursor position
+            event.preventDefault();
+            if (paragraphType && $from.parent.isTextblock) {
+              const tr = state.tr.insertText('  ', $from.pos, $to.pos);
+              dispatch(tr);
+              return true;
+            }
+            return false;
+          }
+        } else {
+          return false;
+        }
 
         event.preventDefault();
 
+        // ── Case 2: Shift+Tab — outdent only the CURRENT item ────────────────
+        // Explicitly narrow selection to just the item containing $from so
+        // liftListItem doesn't lift the whole parent chain.
         if (event.shiftKey) {
-          return liftMultipleListItems(state, dispatch, listItemType);
-        } else {
-          return sinkMultipleListItems(state, dispatch, listItemType);
+          return liftCurrentItemOnly(state, dispatch, listItemType);
         }
+
+        // ── Case 3: Tab — sink current item ──────────────────────────────────
+        return sinkMultipleListItems(state, dispatch, listItemType);
       },
     },
   });
 });
+
+/**
+ * Lift ONLY the list_item that contains the cursor, one level up.
+ * If already at top level, convert to a plain paragraph.
+ * Does NOT lift sibling items or parent items.
+ */
+function liftCurrentItemOnly(state: any, dispatch: any, listItemType: any): boolean {
+  const { $from } = state.selection;
+
+  // Find the innermost list_item containing the cursor
+  let itemDepth = -1;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type === listItemType) { itemDepth = d; break; }
+  }
+  if (itemDepth < 0) return false;
+
+  // Build a selection that starts and ends inside ONLY this list_item
+  const itemStart = $from.before(itemDepth) + 1; // just inside the list_item
+  const $sel = state.doc.resolve(itemStart);
+  const isolatedSel = state.selection.constructor.near($sel);
+  const isolatedState = state.apply(state.tr.setSelection(isolatedSel));
+
+  // Try native liftListItem on the isolated state
+  let itemTr: any = null;
+  const lifted = liftListItem(listItemType)(isolatedState, (t: any) => { itemTr = t; });
+
+  if (lifted && itemTr) {
+    dispatch(itemTr.scrollIntoView());
+    return true;
+  }
+
+  // Already at top level — convert to plain paragraph
+  return liftTopLevelListItem(isolatedState, dispatch, listItemType);
+}
 
 /**
  * Robust multi-item sink/lift.
