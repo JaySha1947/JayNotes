@@ -471,7 +471,9 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     const view = getView();
     if (!view) return;
     if (!view.hasFocus()) view.focus();
-    requestAnimationFrame(() => { try { execInsertChecklist(view); } catch (err) { console.warn('[checklist]', err); } });
+    // Run synchronously (no rAF) so the view state reflects exactly where the
+    // cursor was when the button was clicked, before any focus-shift side-effects.
+    try { execInsertChecklist(view); } catch (err) { console.warn('[checklist]', err); }
   }, [getView]);
 
   // Blockquote toggle
