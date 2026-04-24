@@ -517,15 +517,17 @@ export const listTabPlugin = $prose(() => {
 
         event.preventDefault();
 
-        // ── Case 2: Shift+Tab — outdent only the CURRENT item ────────────────
-        // Explicitly narrow selection to just the item containing $from so
-        // liftListItem doesn't lift the whole parent chain.
+        // ── Case 2: Shift+Tab — outdent selected item(s) ─────────────────────
+        // Uses execOutdent which correctly handles multi-row selections by
+        // enumerating direct children of the parent list that overlap the
+        // selection (see selectedListItemsInParent). liftCurrentItemOnly
+        // alone would only affect the item containing $from.
         if (event.shiftKey) {
-          return liftCurrentItemOnly(state, dispatch, listItemType);
+          return execOutdent(view);
         }
 
-        // ── Case 3: Tab — sink current item ──────────────────────────────────
-        return sinkMultipleListItems(state, dispatch, listItemType);
+        // ── Case 3: Tab — indent selected item(s) ────────────────────────────
+        return execIndent(view);
       },
     },
   });
@@ -667,6 +669,55 @@ function applyToEachItem(
 }
 
 /**
+ * Collect the positions of list_item nodes that are DIRECT CHILDREN of the
+ * innermost list containing $from, AND whose range overlaps the selection.
+ *
+ * We cannot use doc.nodesBetween(from, to) for this, because nodesBetween
+ * visits ancestor nodes BEFORE descendants — and if we return false on the
+ * first list_item seen (to avoid traversing into its children), we miss all
+ * nested items when the selection starts inside nested content: the outer
+ * list_item's range encloses the whole nested structure, so the callback
+ * stops at it and we never see the nested items that the user actually
+ * highlighted.
+ *
+ * Algorithm: walk up from $from to find the innermost list_item's parent
+ * list, then iterate that list's direct children and keep those whose range
+ * [childStart, childEnd] overlaps the selection's [from, to].
+ *
+ * Returns absolute positions of the list_item nodes (suitable for
+ * doc.nodeAt / doc.resolve(pos + 1)).
+ */
+function selectedListItemsInParent(state: any, listItemType: any): number[] {
+  const { $from, from, to } = state.selection;
+
+  // Find depth of the innermost list_item containing $from
+  let itemDepth = -1;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type === listItemType) { itemDepth = d; break; }
+  }
+  if (itemDepth < 0) return [];
+
+  // The parent list is at itemDepth - 1
+  const listDepth = itemDepth - 1;
+  const listNode = $from.node(listDepth);
+  const listContentStart = $from.before(listDepth) + 1; // first byte inside the list
+
+  const positions: number[] = [];
+  listNode.forEach((child: any, offset: number) => {
+    if (child.type !== listItemType) return; // safety
+    const childStart = listContentStart + offset; // pos of the child node itself
+    const childEnd = childStart + child.nodeSize;
+    // Overlap test: selection touches this child's range.
+    // Using strict inequalities on one side avoids treating a cursor at the
+    // exact boundary between two items as being "in both".
+    if (from < childEnd && to > childStart) {
+      positions.push(childStart);
+    }
+  });
+  return positions;
+}
+
+/**
  * Indent the selected list item(s) by one level.
  *
  * The correct behaviour — matching Word, VS Code, etc. — is:
@@ -695,19 +746,10 @@ export function execIndent(view: any): boolean {
   const orderedListType = schema.nodes.ordered_list;
   if (!listItemType) return false;
 
-  const { from, to } = state.selection;
-
-  // Collect the top-level list_item positions overlapping the selection.
-  // "Top-level" means we stop descending once we find a list_item — we do
-  // not collect items nested inside selected items.
-  const positions: number[] = [];
-  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
-    if (node.type === listItemType) {
-      positions.push(pos);
-      return false; // don't descend into children
-    }
-    return true;
-  });
+  // Collect only the items that are direct children of the same parent list
+  // AND overlap the selection. See selectedListItemsInParent for why we can't
+  // use doc.nodesBetween here.
+  const positions = selectedListItemsInParent(state, listItemType);
 
   if (positions.length === 0) return false;
 
@@ -838,17 +880,10 @@ export function execOutdent(view: any): boolean {
   const listItemType = state.schema.nodes.list_item;
   if (!listItemType) return false;
 
-  const { from, to } = state.selection;
-
-  // Collect top-level list_item positions overlapping the selection
-  const positions: number[] = [];
-  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
-    if (node.type === listItemType) {
-      positions.push(pos);
-      return false;
-    }
-    return true;
-  });
+  // Collect only the items that are direct children of the same parent list
+  // AND overlap the selection. nodesBetween would miss nested items because
+  // it halts on the outermost list_item ancestor; see selectedListItemsInParent.
+  const positions = selectedListItemsInParent(state, listItemType);
 
   if (positions.length === 0) return false;
 
