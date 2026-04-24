@@ -401,6 +401,115 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
   return <Milkdown />;
 };
 
+// ─── Table-theme markdown helpers ────────────────────────────────────────────
+//
+// Themes are stored as HTML comments immediately before their table in the
+// markdown file:  <!-- jn-theme:ocean -->
+// This way the theme travels with the file and works cross-browser / cross-device.
+
+/**
+ * Extract <!-- jn-theme:X --> comments from raw markdown.
+ * Returns the cleaned markdown (comments removed) and the extracted theme
+ * entries ready for restoreTableThemes().
+ *
+ * Algorithm: scan lines top-to-bottom. When we hit a jn-theme comment,
+ * remember its theme. When we hit the start of a GFM table (line starting
+ * with `|`), assign the remembered theme to that table's index (0-based count
+ * of tables seen so far) and clear the pending theme.
+ */
+function extractTableThemeComments(
+  md: string,
+): { clean: string; themes: Array<{ index: number; theme: string }> } {
+  const themes: Array<{ index: number; theme: string }> = [];
+  let tableIndex = 0;
+  let pendingTheme: string | null = null;
+
+  const lines = md.split('\n');
+  const kept: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const themeMatch = line.match(/^<!--\s*jn-theme:([a-z0-9_-]*)\s*-->$/);
+    if (themeMatch) {
+      pendingTheme = themeMatch[1] || null;
+      // Drop this line (don't push to kept)
+      continue;
+    }
+    // Detect start of a GFM table: a line that starts with |
+    if (line.trimStart().startsWith('|')) {
+      if (pendingTheme) {
+        themes.push({ index: tableIndex, theme: pendingTheme });
+        pendingTheme = null;
+      }
+      // Count each table only once: skip until we leave the table block
+      kept.push(line);
+      i++;
+      while (i < lines.length && lines[i].trimStart().startsWith('|')) {
+        kept.push(lines[i]);
+        i++;
+      }
+      tableIndex++;
+      // Re-process the line that ended the table block
+      i--;
+      continue;
+    }
+    // Non-table, non-comment line: clear pending theme if it wasn't consumed
+    if (pendingTheme && line.trim() !== '') pendingTheme = null;
+    kept.push(line);
+  }
+
+  return { clean: kept.join('\n'), themes };
+}
+
+/**
+ * Inject <!-- jn-theme:X --> comments before each table in the serialized
+ * markdown, based on the current ProseMirror plugin state.
+ * Existing jn-theme comments are first stripped, then fresh ones injected.
+ */
+function injectTableThemeComments(
+  md: string,
+  pmState: any,
+): string {
+  // Build theme map: tableIndex → themeId using the imported serializeTableThemes
+  const themeMap = new Map<number, string>();
+  const entries: Array<{ index: number; theme: string }> = serializeTableThemes(pmState);
+  for (const { index, theme } of entries) {
+    if (theme) themeMap.set(index, theme);
+  }
+
+  // Strip any existing jn-theme comments first
+  const stripped = md.replace(/^<!--\s*jn-theme:[a-z0-9_-]*\s*-->\n/gm, '');
+
+  if (themeMap.size === 0) return stripped;
+
+  // Re-inject fresh comments before each themed table
+  let tableIndex = 0;
+  const resultLines: string[] = [];
+  const lines = stripped.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trimStart().startsWith('|')) {
+      // Start of a GFM table — inject comment if this table has a theme
+      const theme = themeMap.get(tableIndex);
+      if (theme) resultLines.push(`<!-- jn-theme:${theme} -->`);
+      // Consume all table rows
+      resultLines.push(line);
+      i++;
+      while (i < lines.length && lines[i].trimStart().startsWith('|')) {
+        resultLines.push(lines[i]);
+        i++;
+      }
+      tableIndex++;
+      i--;
+      continue;
+    }
+    resultLines.push(line);
+  }
+
+  return resultLines.join('\n');
+}
+
 // ─── Toolbar button ───────────────────────────────────────────────────────────
 
 const ToolBtn: React.FC<{
@@ -556,15 +665,19 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     catch { return; }
     if (!view) return;
 
-    // Restore themes from localStorage
+    // Restore themes from markdown comments (extracted at load time)
+    // Fall back to localStorage for files saved before this change.
     try {
-      const raw = localStorage.getItem(`jn-themes:${path}`);
-      if (raw) {
-        const entries = JSON.parse(raw) as Array<{ index: number; theme: string }>;
-        if (Array.isArray(entries) && entries.length > 0) {
-          restoreTableThemes(view, entries);
-        }
+      let entries = pendingThemesRef.current;
+      if (entries.length === 0) {
+        // Legacy fallback: check localStorage
+        const raw = localStorage.getItem(`jn-themes:${path}`);
+        if (raw) entries = JSON.parse(raw) as Array<{ index: number; theme: string }>;
       }
+      if (Array.isArray(entries) && entries.length > 0) {
+        restoreTableThemes(view, entries);
+      }
+      pendingThemesRef.current = [];
     } catch (_) { /* ignore corrupt entries */ }
 
     // Restore alignments
@@ -578,19 +691,10 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       }
     } catch (_) { /* ignore corrupt entries */ }
 
-    // Install persistence functions — closed over this view+path
-    persistThemesRef.current = () => {
-      const currentPath = currentFileRef.current;
-      if (!currentPath) return;
-      try {
-        const entries = serializeTableThemes(view.state);
-        if (entries.length === 0) {
-          localStorage.removeItem(`jn-themes:${currentPath}`);
-        } else {
-          localStorage.setItem(`jn-themes:${currentPath}`, JSON.stringify(entries));
-        }
-      } catch (_) { /* quota / parse errors are non-fatal */ }
-    };
+    // Theme persistence is now handled by embedding <!-- jn-theme:X --> comments
+    // in the markdown file (see handleMarkdownChange / injectTableThemeComments).
+    // Keep a no-op ref so cmdTableTheme callers don't crash.
+    persistThemesRef.current = () => { /* themes saved via markdown comments */ };
     persistAlignRef.current = () => {
       const currentPath = currentFileRef.current;
       if (!currentPath) return;
@@ -767,28 +871,44 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     } catch (err) { console.error('[insertWikilink]', err); }
   }, []);
 
-  // Load file
+  // Themes extracted from markdown comments during load — restored after editor mounts
+  const pendingThemesRef = useRef<Array<{ index: number; theme: string }>>([]);
+
+  // Load file — strips <!-- jn-theme:X --> comments from content (editor never
+  // sees them) and stores the extracted themes to restore after mount.
   useEffect(() => {
     if (!filePath) { setContent(''); return; }
     editorRef.current = null;
     setLoading(true);
     apiFetch(`/api/file?path=${encodeURIComponent(filePath)}`)
       .then(r => r.ok ? r.text() : Promise.reject(new Error('Load failed')))
-      .then(text => { setContent(text); setEditorKey(k => k + 1); })
+      .then(text => {
+        const { clean, themes } = extractTableThemeComments(text);
+        pendingThemesRef.current = themes;
+        setContent(clean);
+        setEditorKey(k => k + 1);
+      })
       .catch(() => { setContent('# Error loading file'); setEditorKey(k => k + 1); })
       .finally(() => setLoading(false));
   }, [filePath]);
 
-  // Save
+  // Save — injects <!-- jn-theme:X --> comments into the markdown before each
+  // themed table so the theme travels with the file and works cross-browser.
   const handleMarkdownChange = useCallback((md: string) => {
     const path = currentFileRef.current;
     if (!path) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      // Embed table themes as HTML comments in the markdown
+      const view = editorRef.current
+        ? (() => { try { return editorRef.current!.action((ctx: any) => ctx.get(editorViewCtx)); } catch { return null; } })()
+        : null;
+      const mdWithThemes = view ? injectTableThemeComments(md, view.state) : md;
+
       apiFetch('/api/file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, content: md }),
+        body: JSON.stringify({ path, content: mdWithThemes }),
       }).then(() => window.dispatchEvent(new CustomEvent('file-saved')))
         .catch(err => console.error('[save]', err));
     }, 600);
