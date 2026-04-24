@@ -493,19 +493,21 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
       if (inTable) {
         const { $from } = view.state.selection;
-        for (let d = $from.depth; d >= 0; d--) {
-          if ($from.node(d).type.name === 'table') {
-            const pos = $from.before(d);
-            const dom = view.nodeDOM(pos) as HTMLElement | null;
-            // tableWrapper is the parent of the <table> DOM node
-            const wrapper = (dom as HTMLElement | null)?.closest?.('.tableWrapper') as HTMLElement | null
-              ?? dom?.parentElement as HTMLElement | null;
-            activeTableWrapperRef.current = wrapper;
-            if (wrapper) {
-              setTableTheme(wrapper.getAttribute('data-jn-theme') ?? '');
-            }
-            break;
+        // Walk up from the cursor's actual DOM node to find .tableWrapper.
+        // Using domAtPos is reliable regardless of NodeView internals — it gives
+        // us the real DOM node at the cursor position, from which we can walk up.
+        try {
+          const domInfo = view.domAtPos($from.pos);
+          const cursorNode = domInfo.node instanceof Element
+            ? domInfo.node
+            : domInfo.node.parentElement;
+          const wrapper = cursorNode?.closest?.('.tableWrapper') as HTMLElement | null;
+          activeTableWrapperRef.current = wrapper ?? null;
+          if (wrapper) {
+            setTableTheme(wrapper.getAttribute('data-jn-theme') ?? '');
           }
+        } catch (_) {
+          activeTableWrapperRef.current = null;
         }
       } else {
         activeTableWrapperRef.current = null;

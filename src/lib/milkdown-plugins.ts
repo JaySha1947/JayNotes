@@ -769,17 +769,31 @@ export const fontColorMark = $markSchema('jn_color', () => ({
     0,
   ],
   parseMarkdown: {
+    // Match inline HTML nodes that carry our data attribute
     match: (node: any) =>
       node.type === 'html' && /data-jn-color/.test(node.value ?? ''),
-    runner: () => {/* handled by HTML passthrough */},
+    runner: (state: any, node: any, markType: any) => {
+      // Extract the color from the raw HTML value
+      const colorMatch = (node.value ?? '').match(/data-jn-color="([^"]+)"/);
+      const color = colorMatch ? colorMatch[1] : '#000000';
+      // Extract inner text content
+      const textMatch = (node.value ?? '').match(/>([^<]*)<\/span>/);
+      const text = textMatch ? textMatch[1] : '';
+      if (text) {
+        state.openMark(markType, { color });
+        state.addNode('text', undefined, text);
+        state.closeMark(markType);
+      }
+    },
   },
   toMarkdown: {
     match: (mark: any) => mark.type.name === 'jn_color',
-    runner: (state: any, mark: any, node: any) => {
-      const text = (node.text ?? '').replace(/([<>&])/g, (m: string) => (
-        m === '<' ? '&lt;' : m === '>' ? '&gt;' : '&amp;'
-      ));
-      state.addNode('html', undefined, `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">${text}</span>`);
+    // Called by the serializer once per mark — just open the mark context.
+    // The serializer walks the node's text children and calls closeMark after.
+    runner: (state: any, mark: any) => {
+      state.withMark(mark, 'html', undefined, {
+        value: `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">`,
+      });
     },
   },
 }));
@@ -804,15 +818,24 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
   parseMarkdown: {
     match: (node: any) =>
       node.type === 'html' && /data-jn-highlight/.test(node.value ?? ''),
-    runner: () => {/* handled by HTML passthrough */},
+    runner: (state: any, node: any, markType: any) => {
+      const colorMatch = (node.value ?? '').match(/data-jn-highlight="([^"]+)"/);
+      const color = colorMatch ? colorMatch[1] : '#ffeb3b';
+      const textMatch = (node.value ?? '').match(/>([^<]*)<\/span>/);
+      const text = textMatch ? textMatch[1] : '';
+      if (text) {
+        state.openMark(markType, { color });
+        state.addNode('text', undefined, text);
+        state.closeMark(markType);
+      }
+    },
   },
   toMarkdown: {
     match: (mark: any) => mark.type.name === 'jn_highlight',
-    runner: (state: any, mark: any, node: any) => {
-      const text = (node.text ?? '').replace(/([<>&])/g, (m: string) => (
-        m === '<' ? '&lt;' : m === '>' ? '&gt;' : '&amp;'
-      ));
-      state.addNode('html', undefined, `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">${text}</span>`);
+    runner: (state: any, mark: any) => {
+      state.withMark(mark, 'html', undefined, {
+        value: `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">`,
+      });
     },
   },
 }));
