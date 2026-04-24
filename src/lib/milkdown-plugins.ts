@@ -4,7 +4,7 @@
 
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
-import { $mark, $prose } from '@milkdown/utils';
+import { $mark, $markSchema, $prose } from '@milkdown/utils';
 import { wrapInList, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 
 // ─── Callback for opening a file (set by the React component) ────────────────
@@ -740,61 +740,108 @@ function liftMultipleListItems(state: any, dispatch: any, listItemType: any): bo
 
 // ─── Font color & highlight marks ────────────────────────────────────────────
 //
-// These are Milkdown `$mark` plugins that inject two new marks into the schema:
+// These are Milkdown `$markSchema` plugins that inject two new marks:
 //   jn_color     — renders as <span style="color: ...">
 //   jn_highlight — renders as <span style="background-color: ...">
+//
+// Uses $markSchema (not bare $mark) for proper context integration and
+// includes parseMarkdown / toMarkdown stubs so marks survive round-trips
+// (serialized as HTML spans in the markdown).
 //
 // `applyFontColor` and `applyHighlight` are called from the toolbar and use
 // ProseMirror transactions to add/remove these marks on the current selection.
 
-export const fontColorMark = $mark('jn_color', () => ({
-  attrs: { color: { default: null } },
+export const fontColorMark = $markSchema('jn_color', () => ({
+  attrs: { color: { default: '#000000' } },
+  inclusive: false,
   parseDOM: [
     {
       tag: 'span[data-jn-color]',
-      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-color') }),
-    },
-    {
-      style: 'color',
-      getAttrs: (value: string) => value ? { color: value } : false,
+      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-color') || '#000000' }),
     },
   ],
-  toDOM: (mark: any) => ['span', { 'data-jn-color': mark.attrs.color, style: `color:${mark.attrs.color}` }, 0],
+  toDOM: (mark: any) => [
+    'span',
+    {
+      'data-jn-color': mark.attrs.color,
+      style: `color:${mark.attrs.color}`,
+    },
+    0,
+  ],
+  parseMarkdown: {
+    match: (node: any) =>
+      node.type === 'html' && /data-jn-color/.test(node.value ?? ''),
+    runner: () => {/* handled by HTML passthrough */},
+  },
+  toMarkdown: {
+    match: (mark: any) => mark.type.name === 'jn_color',
+    runner: (state: any, mark: any, node: any) => {
+      const text = (node.text ?? '').replace(/([<>&])/g, (m: string) => (
+        m === '<' ? '&lt;' : m === '>' ? '&gt;' : '&amp;'
+      ));
+      state.addNode('html', undefined, `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">${text}</span>`);
+    },
+  },
 }));
 
-export const highlightMark = $mark('jn_highlight', () => ({
-  attrs: { color: { default: null } },
+export const highlightMark = $markSchema('jn_highlight', () => ({
+  attrs: { color: { default: '#ffeb3b' } },
+  inclusive: false,
   parseDOM: [
     {
       tag: 'span[data-jn-highlight]',
-      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-highlight') }),
-    },
-    {
-      style: 'background-color',
-      getAttrs: (value: string) => value ? { color: value } : false,
+      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-highlight') || '#ffeb3b' }),
     },
   ],
-  toDOM: (mark: any) => ['span', { 'data-jn-highlight': mark.attrs.color, style: `background-color:${mark.attrs.color};border-radius:2px;padding:0 1px` }, 0],
+  toDOM: (mark: any) => [
+    'span',
+    {
+      'data-jn-highlight': mark.attrs.color,
+      style: `background-color:${mark.attrs.color};border-radius:2px;padding:0 1px`,
+    },
+    0,
+  ],
+  parseMarkdown: {
+    match: (node: any) =>
+      node.type === 'html' && /data-jn-highlight/.test(node.value ?? ''),
+    runner: () => {/* handled by HTML passthrough */},
+  },
+  toMarkdown: {
+    match: (mark: any) => mark.type.name === 'jn_highlight',
+    runner: (state: any, mark: any, node: any) => {
+      const text = (node.text ?? '').replace(/([<>&])/g, (m: string) => (
+        m === '<' ? '&lt;' : m === '>' ? '&gt;' : '&amp;'
+      ));
+      state.addNode('html', undefined, `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">${text}</span>`);
+    },
+  },
 }));
 
 /**
  * Apply or remove a font color on the current selection.
+ * If selection is empty (just cursor), no-op and returns false.
  * Passing `null` removes all jn_color marks from the selection.
  */
 export function applyFontColor(view: any, color: string | null): boolean {
+  if (!view) return false;
   const { state, dispatch } = view;
   const markType = state.schema.marks['jn_color'];
-  if (!markType) return false;
+  if (!markType) {
+    console.warn('[applyFontColor] jn_color mark not in schema');
+    return false;
+  }
   const { from, to, empty } = state.selection;
-  if (empty) return false;
+  if (empty) {
+    console.warn('[applyFontColor] selection is empty — select text first');
+    return false;
+  }
   let tr = state.tr;
-  if (color === null) {
-    tr = tr.removeMark(from, to, markType);
-  } else {
-    // Remove existing color first then add new
-    tr = tr.removeMark(from, to, markType).addMark(from, to, markType.create({ color }));
+  tr = tr.removeMark(from, to, markType);
+  if (color !== null) {
+    tr = tr.addMark(from, to, markType.create({ color }));
   }
   dispatch(tr);
+  view.focus();
   return true;
 }
 
@@ -803,17 +850,24 @@ export function applyFontColor(view: any, color: string | null): boolean {
  * Passing `null` removes all jn_highlight marks from the selection.
  */
 export function applyHighlight(view: any, color: string | null): boolean {
+  if (!view) return false;
   const { state, dispatch } = view;
   const markType = state.schema.marks['jn_highlight'];
-  if (!markType) return false;
+  if (!markType) {
+    console.warn('[applyHighlight] jn_highlight mark not in schema');
+    return false;
+  }
   const { from, to, empty } = state.selection;
-  if (empty) return false;
+  if (empty) {
+    console.warn('[applyHighlight] selection is empty — select text first');
+    return false;
+  }
   let tr = state.tr;
-  if (color === null) {
-    tr = tr.removeMark(from, to, markType);
-  } else {
-    tr = tr.removeMark(from, to, markType).addMark(from, to, markType.create({ color }));
+  tr = tr.removeMark(from, to, markType);
+  if (color !== null) {
+    tr = tr.addMark(from, to, markType.create({ color }));
   }
   dispatch(tr);
+  view.focus();
   return true;
 }

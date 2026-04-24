@@ -4,6 +4,7 @@
 import React, { useEffect, useRef, useState, useCallback, Component } from 'react';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx, remarkStringifyOptionsCtx } from '@milkdown/core';
 import { isInTable } from '@milkdown/prose/tables';
+import { TextSelection } from '@milkdown/prose/state';
 import {
   commonmark,
   toggleStrongCommand, toggleEmphasisCommand, toggleInlineCodeCommand,
@@ -264,6 +265,12 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
         }));
 
         ctx.get(listenerCtx).markdownUpdated((_ctx, md) => onChangeRef.current(md));
+        // Fire a custom event on every selection change so the React UI can
+        // reliably detect cursor placement (native 'selectionchange' doesn't
+        // fire on single-click cursor placement inside ProseMirror).
+        ctx.get(listenerCtx).selectionUpdated(() => {
+          window.dispatchEvent(new CustomEvent('jn-selection-updated'));
+        });
         ctx.update(uploadConfig.key, (prev) => ({
           ...prev,
           enableHtmlFileUploader: true,
@@ -333,8 +340,10 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [showTableTools, setShowTableTools] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
-  const [showColorPicker, setShowColorPicker] = useState(false);
-  const [showHighlightPicker, setShowHighlightPicker] = useState(false);
+  // Color picker dropdowns use position:fixed with coords to escape the
+  // overflow-x-auto toolbar scroll container.
+  const [colorPickerPos, setColorPickerPos] = useState<{ top: number; left: number } | null>(null);
+  const [highlightPickerPos, setHighlightPickerPos] = useState<{ top: number; left: number } | null>(null);
   const [tableTheme, setTableTheme] = useState<string>('');
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
@@ -345,6 +354,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const colorPickerRef = useRef<HTMLDivElement | null>(null);
   const highlightPickerRef = useRef<HTMLDivElement | null>(null);
+  const colorBtnRef = useRef<HTMLButtonElement | null>(null);
+  const highlightBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Cache the last selection range so color/highlight can be applied even after
+  // the picker opens (which may move focus away from the editor).
+  const savedSelectionRef = useRef<{ from: number; to: number } | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
@@ -466,6 +480,10 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
   // Auto-show/hide table toolbar when cursor moves into/out of a table.
   // Also sync the active theme indicator when moving between tables.
+  // Uses Milkdown's `selectionUpdated` via a custom window event — this is
+  // triggered by every ProseMirror transaction (including single-click cursor
+  // placement), unlike native `selectionchange` which only fires on actual
+  // DOM selection changes.
   useEffect(() => {
     const check = () => {
       const view = getView();
@@ -493,8 +511,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         activeTableWrapperRef.current = null;
       }
     };
+    window.addEventListener('jn-selection-updated', check);
+    // Also keep native selectionchange as a backup for DOM selection edge cases
     document.addEventListener('selectionchange', check);
-    return () => document.removeEventListener('selectionchange', check);
+    return () => {
+      window.removeEventListener('jn-selection-updated', check);
+      document.removeEventListener('selectionchange', check);
+    };
   }, [getView]);
 
   // Close template menu when clicking outside it
@@ -511,18 +534,23 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
   // Close color pickers when clicking outside
   useEffect(() => {
-    if (!showColorPicker && !showHighlightPicker) return;
+    if (!colorPickerPos && !highlightPickerPos) return;
     const handler = (e: MouseEvent) => {
-      if (showColorPicker && colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
-        setShowColorPicker(false);
+      const target = e.target as Node;
+      if (colorPickerPos) {
+        const inBtn = colorBtnRef.current?.contains(target);
+        const inPicker = colorPickerRef.current?.contains(target);
+        if (!inBtn && !inPicker) setColorPickerPos(null);
       }
-      if (showHighlightPicker && highlightPickerRef.current && !highlightPickerRef.current.contains(e.target as Node)) {
-        setShowHighlightPicker(false);
+      if (highlightPickerPos) {
+        const inBtn = highlightBtnRef.current?.contains(target);
+        const inPicker = highlightPickerRef.current?.contains(target);
+        if (!inBtn && !inPicker) setHighlightPickerPos(null);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [showColorPicker, showHighlightPicker]);
+  }, [colorPickerPos, highlightPickerPos]);
 
   // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
@@ -569,20 +597,38 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     });
   }, [getView]);
 
-  // Font color
+  // Font color — restore saved selection (opening the picker can move focus)
+  // before applying the mark.
   const cmdColor = useCallback((color: string | null) => {
     const view = getView();
     if (!view) return;
+    const saved = savedSelectionRef.current;
+    if (saved) {
+      // Restore selection inside ProseMirror
+      const tr = view.state.tr.setSelection(
+        TextSelection.create(view.state.doc, saved.from, saved.to)
+      );
+      view.dispatch(tr);
+      view.focus();
+    }
     applyFontColor(view, color);
-    setShowColorPicker(false);
+    setColorPickerPos(null);
   }, [getView]);
 
-  // Highlight
+  // Highlight — same selection restoration as font color.
   const cmdHighlight = useCallback((color: string | null) => {
     const view = getView();
     if (!view) return;
+    const saved = savedSelectionRef.current;
+    if (saved) {
+      const tr = view.state.tr.setSelection(
+        TextSelection.create(view.state.doc, saved.from, saved.to)
+      );
+      view.dispatch(tr);
+      view.focus();
+    }
     applyHighlight(view, color);
-    setShowHighlightPicker(false);
+    setHighlightPickerPos(null);
   }, [getView]);
 
   // Apply table theme class to the table wrapper the cursor is currently in.
@@ -659,62 +705,59 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={12} /></ToolBtn>
               <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={12} /></ToolBtn>
               {/* Font color picker */}
-              <div className="relative" ref={colorPickerRef}>
-                <button
-                  className="format-toolbar-btn"
-                  title="Font color"
-                  onClick={() => { setShowColorPicker(o => !o); setShowHighlightPicker(false); }}
-                  style={{ position: 'relative' }}
-                >
-                  <Palette size={12} />
-                </button>
-                {showColorPicker && (
-                  <div className="jn-color-picker-dropdown" style={{ left: 0 }}>
-                    <div className="jn-color-picker-label">Font Color</div>
-                    <div className="jn-color-picker-grid">
-                      {FONT_COLORS.map(({ label, color }) => (
-                        <button
-                          key={label}
-                          title={label}
-                          className="jn-color-swatch"
-                          style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
-                          onMouseDown={e => { e.preventDefault(); cmdColor(color); }}
-                        >
-                          {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <button
+                ref={colorBtnRef}
+                className="format-toolbar-btn"
+                title="Font color (select text first)"
+                onMouseDown={e => {
+                  e.preventDefault(); // Don't blur the editor — preserves selection
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                }}
+                onClick={() => {
+                  if (colorPickerPos) {
+                    setColorPickerPos(null);
+                    return;
+                  }
+                  const rect = colorBtnRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    setColorPickerPos({ top: rect.bottom + 4, left: rect.left });
+                    setHighlightPickerPos(null);
+                  }
+                }}
+              >
+                <Palette size={12} />
+              </button>
               {/* Highlight picker */}
-              <div className="relative" ref={highlightPickerRef}>
-                <button
-                  className="format-toolbar-btn"
-                  title="Highlight"
-                  onClick={() => { setShowHighlightPicker(o => !o); setShowColorPicker(false); }}
-                >
-                  <Highlighter size={12} />
-                </button>
-                {showHighlightPicker && (
-                  <div className="jn-color-picker-dropdown" style={{ left: 0 }}>
-                    <div className="jn-color-picker-label">Highlight</div>
-                    <div className="jn-color-picker-grid">
-                      {HIGHLIGHT_COLORS.map(({ label, color }) => (
-                        <button
-                          key={label}
-                          title={label}
-                          className="jn-color-swatch"
-                          style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
-                          onMouseDown={e => { e.preventDefault(); cmdHighlight(color); }}
-                        >
-                          {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <button
+                ref={highlightBtnRef}
+                className="format-toolbar-btn"
+                title="Highlight (select text first)"
+                onMouseDown={e => {
+                  e.preventDefault();
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                }}
+                onClick={() => {
+                  if (highlightPickerPos) {
+                    setHighlightPickerPos(null);
+                    return;
+                  }
+                  const rect = highlightBtnRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    setHighlightPickerPos({ top: rect.bottom + 4, left: rect.left });
+                    setColorPickerPos(null);
+                  }
+                }}
+              >
+                <Highlighter size={12} />
+              </button>
               <div className="format-toolbar-separator" />
               <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 11 }}>H1</ToolBtn>
               <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 10 }}>H2</ToolBtn>
@@ -875,6 +918,54 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           </MilkdownProvider>
         </div>
       </div>
+
+      {/* Floating color pickers rendered at root level with position:fixed
+          to escape the overflow-x-auto toolbar scroll container. */}
+      {colorPickerPos && (
+        <div
+          ref={colorPickerRef}
+          className="jn-color-picker-dropdown"
+          style={{ position: 'fixed', top: colorPickerPos.top, left: colorPickerPos.left, zIndex: 1000 }}
+        >
+          <div className="jn-color-picker-label">Font Color</div>
+          <div className="jn-color-picker-grid">
+            {FONT_COLORS.map(({ label, color }) => (
+              <button
+                key={label}
+                title={label}
+                className="jn-color-swatch"
+                style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                onMouseDown={e => { e.preventDefault(); cmdColor(color); }}
+              >
+                {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {highlightPickerPos && (
+        <div
+          ref={highlightPickerRef}
+          className="jn-color-picker-dropdown"
+          style={{ position: 'fixed', top: highlightPickerPos.top, left: highlightPickerPos.left, zIndex: 1000 }}
+        >
+          <div className="jn-color-picker-label">Highlight</div>
+          <div className="jn-color-picker-grid">
+            {HIGHLIGHT_COLORS.map(({ label, color }) => (
+              <button
+                key={label}
+                title={label}
+                className="jn-color-swatch"
+                style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                onMouseDown={e => { e.preventDefault(); cmdHighlight(color); }}
+              >
+                {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
