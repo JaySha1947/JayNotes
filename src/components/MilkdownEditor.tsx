@@ -30,6 +30,7 @@ import {
   Bookmark, FileText, ClipboardList,
   Bold, Italic, Strikethrough, List, ListOrdered,
   CheckSquare, Code, Quote, Minus, Table, AlertTriangle, RefreshCw,
+  Palette, Highlighter,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
@@ -37,6 +38,7 @@ import {
   setWikilinkFileList, setOpenFileCallback,
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
+  fontColorMark, highlightMark, applyFontColor, applyHighlight,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 
@@ -187,6 +189,43 @@ const resizableImageView = $view(imageSchema.node, () => (node: any, view: any, 
 const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
+const FONT_COLORS = [
+  { label: 'Default',   color: null },
+  { label: 'Red',       color: '#e53e3e' },
+  { label: 'Orange',    color: '#dd6b20' },
+  { label: 'Yellow',    color: '#d69e2e' },
+  { label: 'Green',     color: '#38a169' },
+  { label: 'Teal',      color: '#00c882' },
+  { label: 'Blue',      color: '#3182ce' },
+  { label: 'Purple',    color: '#805ad5' },
+  { label: 'Pink',      color: '#d53f8c' },
+  { label: 'Gray',      color: '#718096' },
+  { label: 'White',     color: '#f7fafc' },
+];
+
+const HIGHLIGHT_COLORS = [
+  { label: 'None',      color: null },
+  { label: 'Yellow',    color: 'rgba(253,230,138,0.85)' },
+  { label: 'Green',     color: 'rgba(187,247,208,0.85)' },
+  { label: 'Blue',      color: 'rgba(191,219,254,0.85)' },
+  { label: 'Pink',      color: 'rgba(251,207,232,0.85)' },
+  { label: 'Purple',    color: 'rgba(221,214,254,0.85)' },
+  { label: 'Orange',    color: 'rgba(254,215,170,0.85)' },
+  { label: 'Red',       color: 'rgba(254,202,202,0.85)' },
+  { label: 'Teal',      color: 'rgba(167,243,208,0.85)' },
+];
+
+const TABLE_THEMES = [
+  { id: '',          label: 'Default',    preview: ['#363636','#1e1e1e','#dadada'] },
+  { id: 'ocean',     label: 'Ocean',      preview: ['#1e3a5f','#1a4a6e','#cfe8ff'] },
+  { id: 'forest',    label: 'Forest',     preview: ['#1a3a2a','#1e4a32','#c6f6d5'] },
+  { id: 'sunset',    label: 'Sunset',     preview: ['#7c2d12','#9a3412','#fde8d8'] },
+  { id: 'slate',     label: 'Slate',      preview: ['#1e293b','#0f172a','#e2e8f0'] },
+  { id: 'lavender',  label: 'Lavender',   preview: ['#4c1d95','#5b21b6','#ede9fe'] },
+  { id: 'rose',      label: 'Rose',       preview: ['#881337','#9f1239','#ffe4e6'] },
+  { id: 'minimal',   label: 'Minimal',    preview: ['#ffffff','#f8f8f8','#1a1a1a'] },
+];
+
 // ─── Inner editor ─────────────────────────────────────────────────────────────
 
 interface InnerProps {
@@ -249,6 +288,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(upload)
       .use(trailing)
       .use(columnResizingPlugin)
+      .use(fontColorMark)
+      .use(highlightMark)
       .use(resizableImageView)
       .use(listTabPlugin)
       .use(tagDecoratorPlugin)
@@ -292,6 +333,9 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [showTableTools, setShowTableTools] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showHighlightPicker, setShowHighlightPicker] = useState(false);
+  const [tableTheme, setTableTheme] = useState<string>('');
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
   });
@@ -299,6 +343,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const editorRef = useRef<Editor | null>(null);
   const templateMenuRef = useRef<HTMLDivElement | null>(null);
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const colorPickerRef = useRef<HTMLDivElement | null>(null);
+  const highlightPickerRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
@@ -443,6 +489,21 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [isTemplateMenuOpen]);
 
+  // Close color pickers when clicking outside
+  useEffect(() => {
+    if (!showColorPicker && !showHighlightPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (showColorPicker && colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
+        setShowColorPicker(false);
+      }
+      if (showHighlightPicker && highlightPickerRef.current && !highlightPickerRef.current.contains(e.target as Node)) {
+        setShowHighlightPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showColorPicker, showHighlightPicker]);
+
   // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
     const view = getView();
@@ -486,6 +547,34 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         if (!execLiftBlockquote(view)) editorRef.current?.action(callCommand(wrapInBlockquoteCommand.key));
       } catch (err) { console.warn('[blockquote]', err); }
     });
+  }, [getView]);
+
+  // Font color
+  const cmdColor = useCallback((color: string | null) => {
+    const view = getView();
+    if (!view) return;
+    applyFontColor(view, color);
+    setShowColorPicker(false);
+  }, [getView]);
+
+  // Highlight
+  const cmdHighlight = useCallback((color: string | null) => {
+    const view = getView();
+    if (!view) return;
+    applyHighlight(view, color);
+    setShowHighlightPicker(false);
+  }, [getView]);
+
+  // Apply table theme class to the nearest table wrapper
+  const cmdTableTheme = useCallback((theme: string) => {
+    const view = getView();
+    if (!view) return;
+    const wrapper = (view.dom as HTMLElement).querySelector('.tableWrapper');
+    if (!wrapper) return;
+    // Remove all theme classes
+    TABLE_THEMES.forEach(t => wrapper.classList.remove(`jn-table--${t.id}`));
+    if (theme) wrapper.classList.add(`jn-table--${theme}`);
+    setTableTheme(theme);
   }, [getView]);
 
   // Template
@@ -543,6 +632,63 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={12} /></ToolBtn>
               <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={12} /></ToolBtn>
               <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={12} /></ToolBtn>
+              {/* Font color picker */}
+              <div className="relative" ref={colorPickerRef}>
+                <button
+                  className="format-toolbar-btn"
+                  title="Font color"
+                  onClick={() => { setShowColorPicker(o => !o); setShowHighlightPicker(false); }}
+                  style={{ position: 'relative' }}
+                >
+                  <Palette size={12} />
+                </button>
+                {showColorPicker && (
+                  <div className="jn-color-picker-dropdown" style={{ left: 0 }}>
+                    <div className="jn-color-picker-label">Font Color</div>
+                    <div className="jn-color-picker-grid">
+                      {FONT_COLORS.map(({ label, color }) => (
+                        <button
+                          key={label}
+                          title={label}
+                          className="jn-color-swatch"
+                          style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                          onMouseDown={e => { e.preventDefault(); cmdColor(color); }}
+                        >
+                          {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Highlight picker */}
+              <div className="relative" ref={highlightPickerRef}>
+                <button
+                  className="format-toolbar-btn"
+                  title="Highlight"
+                  onClick={() => { setShowHighlightPicker(o => !o); setShowColorPicker(false); }}
+                >
+                  <Highlighter size={12} />
+                </button>
+                {showHighlightPicker && (
+                  <div className="jn-color-picker-dropdown" style={{ left: 0 }}>
+                    <div className="jn-color-picker-label">Highlight</div>
+                    <div className="jn-color-picker-grid">
+                      {HIGHLIGHT_COLORS.map(({ label, color }) => (
+                        <button
+                          key={label}
+                          title={label}
+                          className="jn-color-swatch"
+                          style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                          onMouseDown={e => { e.preventDefault(); cmdHighlight(color); }}
+                        >
+                          {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="format-toolbar-separator" />
               <ToolBtn title="Heading 1" onClick={() => cmd(wrapInHeadingCommand.key, 1)} style={{ fontWeight: 700, fontSize: 11 }}>H1</ToolBtn>
               <ToolBtn title="Heading 2" onClick={() => cmd(wrapInHeadingCommand.key, 2)} style={{ fontWeight: 700, fontSize: 10 }}>H2</ToolBtn>
@@ -639,6 +785,25 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
           <div className="format-toolbar-separator" />
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.4 }}>Tab / Shift+Tab to navigate cells</span>
+
+          <div className="format-toolbar-separator" />
+          {/* Table design themes */}
+          <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Theme:</span>
+          <div className="flex gap-1 flex-wrap">
+            {TABLE_THEMES.map(t => (
+              <button
+                key={t.id}
+                title={t.label}
+                onClick={() => cmdTableTheme(t.id)}
+                className="jn-table-theme-btn"
+                style={{ outline: tableTheme === t.id ? '2px solid var(--interactive-accent)' : 'none' }}
+              >
+                <span className="jn-table-theme-swatch" style={{ background: t.preview[0] }} />
+                <span className="jn-table-theme-swatch" style={{ background: t.preview[1] }} />
+                <span style={{ fontSize: 9, marginLeft: 3, color: 'var(--text-muted)' }}>{t.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

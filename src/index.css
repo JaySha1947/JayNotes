@@ -27,11 +27,11 @@
 
 :root.light {
   --bg-primary: #ffffff;
-  --bg-secondary: #f2f2f2;
+  --bg-secondary: #ebebeb;
   --text-normal: #1a1a1a;
-  --text-muted: #5c6e74;
-  --interactive-hover: #e0e0e0;
-  --border-color: #d0d0d0;
+  --text-muted: #4a5e65;
+  --interactive-hover: #d8d8d8;
+  --border-color: #c0c0c0;
   --error: #e11d48;
   --success: #059669;
   color-scheme: light;
@@ -575,7 +575,8 @@ body {
 
 .milkdown-wrapper .editor table {
   border-collapse: collapse !important;
-  width: 100% !important;
+  width: auto !important;
+  max-width: 100% !important;
   margin: 6px 0 !important;
   font-size: 0.95em !important;
 }
@@ -955,7 +956,7 @@ html.light .jn-tree-row:hover {
 }
 
 html.light .jn-tree-chevron {
-  color: rgba(0, 0, 0, 0.3);
+  color: rgba(0, 0, 0, 0.45);
 }
 
 .jn-tree-chevron--open {
@@ -964,7 +965,7 @@ html.light .jn-tree-chevron {
 }
 
 html.light .jn-tree-chevron--open {
-  color: rgba(0, 0, 0, 0.45);
+  color: rgba(0, 0, 0, 0.62);
 }
 
 .jn-tree-row:hover .jn-tree-chevron {
@@ -997,7 +998,7 @@ html.light .jn-tree-row:hover .jn-tree-chevron {
 }
 
 html.light .jn-tree-name {
-  color: rgba(0, 0, 0, 0.5);
+  color: rgba(0, 0, 0, 0.72);
 }
 
 /* Folder names slightly brighter */
@@ -1007,7 +1008,8 @@ html.light .jn-tree-name {
 }
 
 html.light .jn-tree-name--folder {
-  color: rgba(0, 0, 0, 0.65);
+  color: rgba(0, 0, 0, 0.82);
+  font-weight: 500;
 }
 
 /* Hover — bump brightness */
@@ -1016,7 +1018,7 @@ html.light .jn-tree-name--folder {
 }
 
 html.light .jn-tree-row:hover .jn-tree-name {
-  color: rgba(0, 0, 0, 0.8);
+  color: rgba(0, 0, 0, 0.92);
 }
 
 /* Active file — full accent */
@@ -1123,11 +1125,215 @@ html.light .jn-tree-action-btn:hover {
 }
 
 html.light .jn-tree-children::before {
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.28);
 }
 
 /* Root-level items have no connector */
 .jn-tree-item-root {
   position: relative;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Font Color & Highlight Picker
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.jn-color-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 100;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  min-width: 148px;
+}
+
+.jn-color-picker-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.jn-color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.jn-color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s, box-shadow 0.1s;
+  outline: none;
+}
+
+.jn-color-swatch:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Table Design Themes
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.jn-table-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  outline-offset: 2px;
+}
+
+.jn-table-theme-btn:hover {
+  background: var(--interactive-hover);
+  border-color: var(--interactive-accent);
+}
+
+.jn-table-theme-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* ── Ocean ────────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean table {
+  border-color: #2b5278 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean th {
+  background: #1e3a5f !important;
+  color: #90cdf4 !important;
+  border-color: #2b5278 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean td {
+  background: #132a46 !important;
+  color: #cfe8ff !important;
+  border-color: #2b5278 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean tr:nth-child(even) td {
+  background: #1a3454 !important;
+}
+
+/* ── Forest ───────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest table {
+  border-color: #276749 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest th {
+  background: #1a3a2a !important;
+  color: #68d391 !important;
+  border-color: #276749 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest td {
+  background: #112a1e !important;
+  color: #c6f6d5 !important;
+  border-color: #276749 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest tr:nth-child(even) td {
+  background: #183524 !important;
+}
+
+/* ── Sunset ───────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--sunset table {
+  border-color: #9c4221 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--sunset th {
+  background: #7c2d12 !important;
+  color: #fbd38d !important;
+  border-color: #9c4221 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--sunset td {
+  background: #5c1e08 !important;
+  color: #fde8d8 !important;
+  border-color: #9c4221 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--sunset tr:nth-child(even) td {
+  background: #6b230e !important;
+}
+
+/* ── Slate ────────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate table {
+  border-color: #334155 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate th {
+  background: #1e293b !important;
+  color: #94a3b8 !important;
+  border-color: #334155 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate td {
+  background: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: #334155 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate tr:nth-child(even) td {
+  background: #172135 !important;
+}
+
+/* ── Lavender ─────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--lavender table {
+  border-color: #6d28d9 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--lavender th {
+  background: #4c1d95 !important;
+  color: #c4b5fd !important;
+  border-color: #6d28d9 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--lavender td {
+  background: #2e1065 !important;
+  color: #ede9fe !important;
+  border-color: #6d28d9 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--lavender tr:nth-child(even) td {
+  background: #3b1577 !important;
+}
+
+/* ── Rose ─────────────────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--rose table {
+  border-color: #be123c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--rose th {
+  background: #881337 !important;
+  color: #fda4af !important;
+  border-color: #be123c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--rose td {
+  background: #4c0519 !important;
+  color: #ffe4e6 !important;
+  border-color: #be123c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--rose tr:nth-child(even) td {
+  background: #5c0822 !important;
+}
+
+/* ── Minimal (light/white) ───────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--minimal table {
+  border-color: #e2e8f0 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--minimal th {
+  background: #f8fafc !important;
+  color: #1e293b !important;
+  font-weight: 600 !important;
+  border-color: #e2e8f0 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--minimal td {
+  background: #ffffff !important;
+  color: #334155 !important;
+  border-color: #e2e8f0 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--minimal tr:nth-child(even) td {
+  background: #f1f5f9 !important;
 }
 

@@ -4,7 +4,7 @@
 
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
-import { $prose } from '@milkdown/utils';
+import { $mark, $prose } from '@milkdown/utils';
 import { wrapInList, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 
 // ─── Callback for opening a file (set by the React component) ────────────────
@@ -736,4 +736,84 @@ function liftMultipleListItems(state: any, dispatch: any, listItemType: any): bo
 
   // Native lift failed → item is at top level. Convert to plain paragraph.
   return liftTopLevelListItem(state, dispatch, listItemType);
+}
+
+// ─── Font color & highlight marks ────────────────────────────────────────────
+//
+// These are Milkdown `$mark` plugins that inject two new marks into the schema:
+//   jn_color     — renders as <span style="color: ...">
+//   jn_highlight — renders as <span style="background-color: ...">
+//
+// `applyFontColor` and `applyHighlight` are called from the toolbar and use
+// ProseMirror transactions to add/remove these marks on the current selection.
+
+export const fontColorMark = $mark('jn_color', () => ({
+  attrs: { color: { default: null } },
+  parseDOM: [
+    {
+      tag: 'span[data-jn-color]',
+      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-color') }),
+    },
+    {
+      style: 'color',
+      getAttrs: (value: string) => value ? { color: value } : false,
+    },
+  ],
+  toDOM: (mark: any) => ['span', { 'data-jn-color': mark.attrs.color, style: `color:${mark.attrs.color}` }, 0],
+}));
+
+export const highlightMark = $mark('jn_highlight', () => ({
+  attrs: { color: { default: null } },
+  parseDOM: [
+    {
+      tag: 'span[data-jn-highlight]',
+      getAttrs: (dom: any) => ({ color: dom.getAttribute('data-jn-highlight') }),
+    },
+    {
+      style: 'background-color',
+      getAttrs: (value: string) => value ? { color: value } : false,
+    },
+  ],
+  toDOM: (mark: any) => ['span', { 'data-jn-highlight': mark.attrs.color, style: `background-color:${mark.attrs.color};border-radius:2px;padding:0 1px` }, 0],
+}));
+
+/**
+ * Apply or remove a font color on the current selection.
+ * Passing `null` removes all jn_color marks from the selection.
+ */
+export function applyFontColor(view: any, color: string | null): boolean {
+  const { state, dispatch } = view;
+  const markType = state.schema.marks['jn_color'];
+  if (!markType) return false;
+  const { from, to, empty } = state.selection;
+  if (empty) return false;
+  let tr = state.tr;
+  if (color === null) {
+    tr = tr.removeMark(from, to, markType);
+  } else {
+    // Remove existing color first then add new
+    tr = tr.removeMark(from, to, markType).addMark(from, to, markType.create({ color }));
+  }
+  dispatch(tr);
+  return true;
+}
+
+/**
+ * Apply or remove a highlight (background color) on the current selection.
+ * Passing `null` removes all jn_highlight marks from the selection.
+ */
+export function applyHighlight(view: any, color: string | null): boolean {
+  const { state, dispatch } = view;
+  const markType = state.schema.marks['jn_highlight'];
+  if (!markType) return false;
+  const { from, to, empty } = state.selection;
+  if (empty) return false;
+  let tr = state.tr;
+  if (color === null) {
+    tr = tr.removeMark(from, to, markType);
+  } else {
+    tr = tr.removeMark(from, to, markType).addMark(from, to, markType.create({ color }));
+  }
+  dispatch(tr);
+  return true;
 }
