@@ -352,12 +352,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [editorKey, setEditorKey] = useState(0);
   const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const [showTableTools, setShowTableTools] = useState(false);
+  const [tableTheme, setTableTheme] = useState<string>('');
+  const [showThemePicker, setShowThemePicker] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   // Color picker dropdowns use position:fixed with coords to escape the
   // overflow-x-auto toolbar scroll container.
   const [colorPickerPos, setColorPickerPos] = useState<{ top: number; left: number } | null>(null);
   const [highlightPickerPos, setHighlightPickerPos] = useState<{ top: number; left: number } | null>(null);
-  const [tableTheme, setTableTheme] = useState<string>('');
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
   });
@@ -369,6 +370,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const highlightPickerRef = useRef<HTMLDivElement | null>(null);
   const colorBtnRef = useRef<HTMLButtonElement | null>(null);
   const highlightBtnRef = useRef<HTMLButtonElement | null>(null);
+  const themePickerRef = useRef<HTMLDivElement | null>(null);
+  const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   // Cache the last selection range so color/highlight can be applied even after
   // the picker opens (which may move focus away from the editor).
   const savedSelectionRef = useRef<{ from: number; to: number } | null>(null);
@@ -697,6 +700,19 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [colorPickerPos, highlightPickerPos]);
+
+  // Close theme picker when clicking outside
+  useEffect(() => {
+    if (!showThemePicker) return;
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (themePickerRef.current?.contains(t)) return;
+      if (themeBtnRef.current?.contains(t)) return;
+      setShowThemePicker(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showThemePicker]);
 
   // Close the right-click ctx menu on: outside click, scroll, Escape, resize.
   // The ctx menu's own button mousedowns call e.preventDefault() + stopPropagation
@@ -1122,22 +1138,73 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.4 }}>Tab / Shift+Tab to navigate cells</span>
 
           <div className="format-toolbar-separator" />
-          {/* Table design themes */}
-          <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.5 }}>Theme:</span>
-          <div className="flex gap-1 flex-wrap">
-            {TABLE_THEMES.map(t => (
-              <button
-                key={t.id}
-                title={t.label}
-                onMouseDown={e => { e.preventDefault(); cmdTableTheme(t.id); }}
-                className="jn-table-theme-btn"
-                style={{ outline: tableTheme === t.id ? '2px solid var(--interactive-accent)' : 'none' }}
+          {/* Table design themes — compact dropdown button */}
+          <div className="relative" style={{ display: 'inline-flex', alignItems: 'center' }}>
+            <button
+              ref={themeBtnRef}
+              className="format-toolbar-btn"
+              title="Table theme"
+              style={{ display: 'flex', alignItems: 'center', gap: 3, paddingRight: 4 }}
+              onClick={() => setShowThemePicker(p => !p)}
+            >
+              {/* Show current theme's preview swatches, or "default" swatches */}
+              {(() => {
+                const cur = TABLE_THEMES.find(t => t.id === tableTheme) ?? TABLE_THEMES[0];
+                return (<>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: cur.preview[0], display: 'inline-block' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: cur.preview[1], display: 'inline-block' }} />
+                  <span style={{ fontSize: 9 }}>▾</span>
+                </>);
+              })()}
+            </button>
+            {showThemePicker && (
+              <div
+                ref={themePickerRef}
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  zIndex: 200,
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 7,
+                  padding: 6,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
+                  minWidth: 110,
+                }}
               >
-                <span className="jn-table-theme-swatch" style={{ background: t.preview[0] }} />
-                <span className="jn-table-theme-swatch" style={{ background: t.preview[1] }} />
-                <span style={{ fontSize: 9, marginLeft: 3, color: 'var(--text-muted)' }}>{t.label}</span>
-              </button>
-            ))}
+                {TABLE_THEMES.map(t => (
+                  <button
+                    key={t.id}
+                    title={t.label}
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      cmdTableTheme(t.id);
+                      setShowThemePicker(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '3px 6px',
+                      borderRadius: 4,
+                      border: 'none',
+                      background: tableTheme === t.id ? 'rgba(0,200,130,0.12)' : 'transparent',
+                      color: 'var(--text-normal)',
+                      cursor: 'pointer',
+                      outline: tableTheme === t.id ? '1px solid var(--interactive-accent)' : 'none',
+                    }}
+                  >
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: t.preview[0], flexShrink: 0 }} />
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: t.preview[1], flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1344,6 +1411,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                 <ChevronDown size={10} />
               </button>
             </span>
+
+            <span className="jn-ctx-divider" />
 
             {/* Highlight split-button */}
             <span className="jn-ctx-split">

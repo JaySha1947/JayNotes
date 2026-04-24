@@ -666,36 +666,247 @@ function applyToEachItem(
   return false;
 }
 
-/** Indent the current list item(s). If not in a list, no-op and returns false. */
+/**
+ * Indent the selected list item(s) by one level.
+ *
+ * The correct behaviour — matching Word, VS Code, etc. — is:
+ *   "Move ALL selected top-level items one level deeper, as a group."
+ *
+ * ProseMirror's sinkListItem only nests the cursor item under its previous
+ * sibling, one at a time.  Calling it once per item in a loop creates a
+ * cascade tree instead of a parallel indent.
+ *
+ * Our approach:
+ *   1. Collect only the top-level list_item nodes that overlap the selection.
+ *   2. The FIRST item in the group becomes the last child of its previous
+ *      sibling's nested list (or a new nested list inside that sibling).
+ *   3. The remaining items are inserted right after the first item inside
+ *      the same nested list — all at the same depth.
+ *
+ * If there is no previous sibling (item is the first in the list), we cannot
+ * sink — no-op and return false for that case.
+ */
 export function execIndent(view: any): boolean {
   if (!view) return false;
   const { state, dispatch } = view;
-  const listItemType = state.schema.nodes.list_item;
+  const schema = state.schema;
+  const listItemType = schema.nodes.list_item;
+  const bulletListType = schema.nodes.bullet_list;
+  const orderedListType = schema.nodes.ordered_list;
   if (!listItemType) return false;
-  const { $from } = state.selection;
-  let inList = false;
-  for (let d = $from.depth; d > 0; d--) {
-    if ($from.node(d).type === listItemType) { inList = true; break; }
+
+  const { from, to } = state.selection;
+
+  // Collect the top-level list_item positions overlapping the selection.
+  // "Top-level" means we stop descending once we find a list_item — we do
+  // not collect items nested inside selected items.
+  const positions: number[] = [];
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    if (node.type === listItemType) {
+      positions.push(pos);
+      return false; // don't descend into children
+    }
+    return true;
+  });
+
+  if (positions.length === 0) return false;
+
+  // Single item — delegate to the native sinkListItem which handles all
+  // edge cases correctly (first-child guard, nested list type, etc.)
+  if (positions.length === 1) {
+    const worked = sinkListItem(listItemType)(state, dispatch);
+    if (worked) { view.focus(); return true; }
+    return false;
   }
-  if (!inList) return false;
+
+  // Multi-item indent.
+  // Strategy: run sinkListItem on the FIRST item to create/find the nested
+  // list, then for every subsequent item splice it into that nested list.
+  //
+  // Implementation: process in reverse (bottom-up) position order so that
+  // position offsets from earlier steps don't invalidate later ones.
+  // But we must first handle the first item to create the anchor, then
+  // move the rest into that anchor — all in one transaction.
+
+  // --- Build the whole thing in a single tr ---
+  // Step 1: figure out the parent list node and index of the first selected item.
+  const firstPos = positions[0];
+  const $first = state.doc.resolve(firstPos + 1);
+  // Depth of the list_item
+  let itemDepth = -1;
+  for (let d = $first.depth; d > 0; d--) {
+    if ($first.node(d).type === listItemType) { itemDepth = d; break; }
+  }
+  if (itemDepth < 0) return false;
+
+  const listDepth = itemDepth - 1;
+  const listNode = $first.node(listDepth);
+  const listStart = $first.before(listDepth);
+
+  // Find the index of the first selected item within its parent list
+  let firstIndex = -1;
+  listNode.forEach((_: any, offset: number, i: number) => {
+    if (listStart + 1 + offset === firstPos) firstIndex = i;
+  });
+  if (firstIndex < 0) return false;
+  // Cannot indent if there's no previous sibling to nest under
+  if (firstIndex === 0) return false;
+
+  // Collect the actual node objects for all selected items (they all share the
+  // same parent list at this depth — that's what "top-level selected" means)
+  const selectedItems: any[] = positions.map(pos => state.doc.nodeAt(pos)).filter(Boolean);
+
+  // Compute spans: start of first selected item → end of last selected item
+  const firstItemStart = positions[0];
+  const lastPos = positions[positions.length - 1];
+  const lastNode = state.doc.nodeAt(lastPos)!;
+  const lastItemEnd = lastPos + lastNode.nodeSize;
+
+  // Previous sibling of the first selected item
+  const prevSiblingIndex = firstIndex - 1;
+  let prevSiblingOffset = 0;
+  listNode.forEach((_: any, offset: number, i: number) => {
+    if (i === prevSiblingIndex) prevSiblingOffset = offset;
+  });
+  const prevSiblingPos = listStart + 1 + prevSiblingOffset;
+  const prevSiblingNode = listNode.child(prevSiblingIndex);
+
+  // Determine the nested list type (prefer the existing nested list in prev
+  // sibling if one exists; otherwise use the same list type as the parent)
+  const parentListType = listNode.type;
+  let existingNestedList: any = null;
+  let nestedListInsertPos: number | null = null; // absolute position to insert into
+
+  // The prev sibling's content: look for a child list at the end
+  const prevSibContent = prevSiblingNode.content;
+  const lastChildOfPrev = prevSibContent.lastChild;
+  if (lastChildOfPrev &&
+      (lastChildOfPrev.type === bulletListType || lastChildOfPrev.type === orderedListType)) {
+    existingNestedList = lastChildOfPrev;
+    // Insert position = end of existing nested list, before its closing token
+    nestedListInsertPos = prevSiblingPos + prevSiblingNode.nodeSize - 1 - 1; // before </li>
+  }
+
+  let tr = state.tr;
+
+  // Build the fragment of items to insert (all selected items)
+  const itemsFragment = schema.nodes.fragment
+    ? null // not a real API; we'll build manually
+    : null;
+
+  if (existingNestedList) {
+    // Append all selected items into the existing nested list, then delete
+    // them from their original positions.
+    // Insert at end of existing nested list (before its closing tag)
+    const insertAt = prevSiblingPos + prevSiblingNode.nodeSize - 1 - 1;
+    // We need to insert BEFORE the </list> of the nested list.
+    // existingNestedList ends at prevSiblingPos + prevSiblingNode.nodeSize - 1 (excl </li>)
+    // nestedList starts at prevSiblingPos + prevSiblingNode.nodeSize - 1 - existingNestedList.nodeSize
+    const nestedListStart = prevSiblingPos + prevSiblingNode.nodeSize - 1 - existingNestedList.nodeSize;
+    const insertIntoNestedListAt = nestedListStart + existingNestedList.nodeSize - 1;
+    tr = tr.insert(insertIntoNestedListAt, selectedItems as any);
+    // Now delete the originals. Because we inserted *before* them, positions shifted.
+    const insertedSize = selectedItems.reduce((s: number, n: any) => s + n.nodeSize, 0);
+    tr = tr.delete(firstItemStart + insertedSize, lastItemEnd + insertedSize);
+  } else {
+    // Create a new nested list wrapping all selected items, replace them all
+    const newNestedList = parentListType.create(null, selectedItems);
+    // Insert the new nested list at the end of the previous sibling (before its closing </li>)
+    const insertAt = prevSiblingPos + prevSiblingNode.nodeSize - 1;
+    tr = tr.insert(insertAt, newNestedList);
+    // Delete original items (positions shifted by inserted nested list)
+    const insertedSize = newNestedList.nodeSize;
+    tr = tr.delete(firstItemStart + insertedSize, lastItemEnd + insertedSize);
+  }
+
+  dispatch(tr.scrollIntoView());
   view.focus();
-  return sinkMultipleListItems(state, dispatch, listItemType);
+  return true;
 }
 
-/** Outdent the current list item(s). If not in a list, no-op and returns false. */
+/**
+ * Outdent the selected list item(s) by one level.
+ *
+ * Applies liftListItem independently to each selected top-level item,
+ * processing top-down so earlier lifted positions don't shift later ones
+ * in the wrong direction. Falls back to converting top-level items to
+ * plain paragraphs if they're already at root depth.
+ */
 export function execOutdent(view: any): boolean {
   if (!view) return false;
   const { state, dispatch } = view;
   const listItemType = state.schema.nodes.list_item;
   if (!listItemType) return false;
-  const { $from } = state.selection;
-  let inList = false;
-  for (let d = $from.depth; d > 0; d--) {
-    if ($from.node(d).type === listItemType) { inList = true; break; }
+
+  const { from, to } = state.selection;
+
+  // Collect top-level list_item positions overlapping the selection
+  const positions: number[] = [];
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    if (node.type === listItemType) {
+      positions.push(pos);
+      return false;
+    }
+    return true;
+  });
+
+  if (positions.length === 0) return false;
+
+  // Single item — use liftCurrentItemOnly (handles top-level → paragraph too)
+  if (positions.length === 1) {
+    const worked = liftCurrentItemOnly(state, dispatch, listItemType);
+    if (worked) { view.focus(); return true; }
+    return false;
   }
-  if (!inList) return false;
-  view.focus();
-  return liftCurrentItemOnly(state, dispatch, listItemType);
+
+  // Multi-item: lift each item independently, accumulating steps top-down
+  // so position offsets from earlier lifts shift later items correctly.
+  let currentState = state;
+  let finalTr = state.tr;
+  let anyWorked = false;
+
+  // Sort ascending (top-down)
+  const ordered = [...positions].sort((a, b) => a - b);
+
+  for (const origPos of ordered) {
+    const mappedPos = finalTr.mapping.map(origPos);
+
+    // Resolve the item in the current doc
+    let resolvedPos: any = null;
+    try {
+      const $p = currentState.doc.resolve(mappedPos + 1);
+      resolvedPos = $p;
+    } catch (_) { continue; }
+    if (!resolvedPos) continue;
+
+    // Set selection inside this item
+    const sel = currentState.selection.constructor.near(resolvedPos);
+    const itemState = currentState.apply(currentState.tr.setSelection(sel));
+
+    let itemTr: any = null;
+    const itemDispatch = (t: any) => { itemTr = t; };
+
+    // Try liftListItem first; fall back to liftTopLevelListItem
+    let worked = liftListItem(listItemType)(itemState, itemDispatch) ?? false;
+    if (!worked) {
+      worked = liftTopLevelListItem(itemState, itemDispatch, listItemType);
+    }
+
+    if (worked && itemTr && itemTr.steps.length > 0) {
+      anyWorked = true;
+      for (const step of itemTr.steps) {
+        try { finalTr = finalTr.step(step); } catch (_) { /* skip */ }
+      }
+      currentState = itemState.apply(itemTr);
+    }
+  }
+
+  if (anyWorked) {
+    dispatch(finalTr.scrollIntoView());
+    view.focus();
+    return true;
+  }
+  return false;
 }
 
 /** Is the cursor inside a list? */
