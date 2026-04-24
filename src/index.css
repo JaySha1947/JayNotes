@@ -480,10 +480,10 @@ body {
   margin: 0 !important;
 }
 .milkdown-wrapper .editor ul li::marker {
-  color: var(--interactive-accent) !important;
+  color: var(--text-normal) !important;
 }
 .milkdown-wrapper .editor ol li::marker {
-  color: var(--interactive-accent) !important;
+  color: var(--text-normal) !important;
 }
 
 /* ── Nested list style cycling ───────────────────────────────────────────────

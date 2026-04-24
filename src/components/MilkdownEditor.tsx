@@ -35,6 +35,7 @@ import {
   Underline,
   AlignLeft, AlignCenter, AlignRight,
   Indent, Outdent, ChevronDown,
+  Scissors, Copy, Clipboard,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
@@ -564,8 +565,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       const savedWidths = localStorage.getItem(`jn-colwidths:${path}`);
       if (savedWidths) {
         const tableWidths = JSON.parse(savedWidths) as Array<Array<number | null>>;
-        // Defer to next frame so ProseMirror has rendered the colgroups
-        requestAnimationFrame(() => {
+        const applyWidths = () => {
           try {
             const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
             if (!editorDom) return;
@@ -580,7 +580,14 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               });
             });
           } catch (_) { /* ignore */ }
-        });
+        };
+        // Double-rAF: first rAF waits for ProseMirror to finish its initial
+        // render; second rAF waits for columnResizingPlugin to also finish.
+        // The 200ms timeout is a belt-and-suspenders fallback for slow mounts.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          applyWidths();
+          setTimeout(applyWidths, 200);
+        }));
       }
     } catch (_) { /* ignore corrupt data */ }
 
@@ -1623,6 +1630,49 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
             style={{ top: ctxMenu.y, left: ctxMenu.x }}
             onMouseDown={stop}
           >
+            {/* Cut / Copy / Paste */}
+            <button
+              className="jn-ctx-btn"
+              title="Cut (Ctrl+X)"
+              onMouseDown={e => {
+                stop(e);
+                document.execCommand('cut');
+                setCtxMenu(null);
+              }}
+            >
+              <Scissors size={13} />
+            </button>
+            <button
+              className="jn-ctx-btn"
+              title="Copy (Ctrl+C)"
+              onMouseDown={e => {
+                stop(e);
+                document.execCommand('copy');
+                setCtxMenu(null);
+              }}
+            >
+              <Copy size={13} />
+            </button>
+            <button
+              className="jn-ctx-btn"
+              title="Paste (Ctrl+V)"
+              onMouseDown={async e => {
+                stop(e);
+                setCtxMenu(null);
+                try {
+                  const view = getView();
+                  if (view) { view.focus(); }
+                  // Use execCommand for synchronous paste (clipboard API requires
+                  // user-gesture context which we've already consumed in onMouseDown)
+                  document.execCommand('paste');
+                } catch { /* paste may be blocked by browser policy */ }
+              }}
+            >
+              <Clipboard size={13} />
+            </button>
+
+            <span className="jn-ctx-divider" />
+
             <button className="jn-ctx-btn" title="Bold (Ctrl+B)" onMouseDown={runAndClose(cmdBold)}>
               <Bold size={13} />
             </button>

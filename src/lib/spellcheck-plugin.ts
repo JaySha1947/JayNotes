@@ -139,16 +139,20 @@ function tokeniseWords(text: string): WordToken[] {
   let m: RegExpExecArray | null;
   WORD_RE.lastIndex = 0;
   while ((m = WORD_RE.exec(text)) !== null) {
-    let w = m[0];
-    // Strip leading/trailing apostrophes
-    w = w.replace(/^['\u2019]+|['\u2019]+$/g, '');
+    const raw = m[0];
+    // Strip leading apostrophes — track how many were stripped so offset is correct
+    let leadStrip = 0;
+    let w = raw;
+    while (w.length > 0 && (w[0] === "'" || w[0] === '\u2019')) { w = w.slice(1); leadStrip++; }
+    // Strip trailing apostrophes
+    while (w.length > 0 && (w[w.length - 1] === "'" || w[w.length - 1] === '\u2019')) w = w.slice(0, -1);
     if (!w || w.length < 2) continue;
     // Skip pure uppercase acronyms (>=3 chars all caps, e.g. URL, API, NATO)
     if (w.length >= 3 && w === w.toUpperCase()) continue;
     // Skip camelCase / mixed-internal-caps words (brands like SharePoint, iPhone,
     // compound proper nouns). A capital letter after position 0 signals this.
     if (/[A-Z]/.test(w.slice(1))) continue;
-    tokens.push({ word: w, offset: m.index });
+    tokens.push({ word: w, offset: m.index + leadStrip });
   }
   return tokens;
 }

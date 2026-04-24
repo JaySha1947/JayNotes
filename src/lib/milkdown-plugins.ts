@@ -1471,6 +1471,7 @@ export function toggleUnderline(view: any): boolean {
  * Apply or remove a font color on the current selection.
  * If selection is empty (just cursor), no-op and returns false.
  * Passing `null` removes all jn_color marks from the selection.
+ * Handles both regular TextSelection and GFM CellSelection (multi-cell table select).
  */
 export function applyFontColor(view: any, color: string | null): boolean {
   if (!view) return false;
@@ -1480,7 +1481,28 @@ export function applyFontColor(view: any, color: string | null): boolean {
     console.warn('[applyFontColor] jn_color mark not in schema');
     return false;
   }
-  const { from, to, empty } = state.selection;
+  const sel = state.selection;
+  // CellSelection: iterate each cell's content range
+  if (sel.constructor?.name === 'CellSelection' || typeof sel.forEachCell === 'function') {
+    let tr = state.tr;
+    let applied = false;
+    sel.forEachCell((cellNode: any, cellPos: number) => {
+      const cellFrom = cellPos + 1;
+      const cellTo = cellPos + cellNode.nodeSize - 1;
+      if (cellTo <= cellFrom) return;
+      applied = true;
+      tr = tr.removeMark(cellFrom, cellTo, markType);
+      if (color !== null) {
+        tr = tr.addMark(cellFrom, cellTo, markType.create({ color }));
+      }
+    });
+    if (!applied) return false;
+    dispatch(tr);
+    view.focus();
+    return true;
+  }
+  // Regular selection
+  const { from, to, empty } = sel;
   if (empty) {
     console.warn('[applyFontColor] selection is empty — select text first');
     return false;
@@ -1498,6 +1520,7 @@ export function applyFontColor(view: any, color: string | null): boolean {
 /**
  * Apply or remove a highlight (background color) on the current selection.
  * Passing `null` removes all jn_highlight marks from the selection.
+ * Handles both regular TextSelection and GFM CellSelection (multi-cell table select).
  */
 export function applyHighlight(view: any, color: string | null): boolean {
   if (!view) return false;
@@ -1507,7 +1530,28 @@ export function applyHighlight(view: any, color: string | null): boolean {
     console.warn('[applyHighlight] jn_highlight mark not in schema');
     return false;
   }
-  const { from, to, empty } = state.selection;
+  const sel = state.selection;
+  // CellSelection: iterate each cell's content range
+  if (sel.constructor?.name === 'CellSelection' || typeof sel.forEachCell === 'function') {
+    let tr = state.tr;
+    let applied = false;
+    sel.forEachCell((cellNode: any, cellPos: number) => {
+      const cellFrom = cellPos + 1;
+      const cellTo = cellPos + cellNode.nodeSize - 1;
+      if (cellTo <= cellFrom) return;
+      applied = true;
+      tr = tr.removeMark(cellFrom, cellTo, markType);
+      if (color !== null) {
+        tr = tr.addMark(cellFrom, cellTo, markType.create({ color }));
+      }
+    });
+    if (!applied) return false;
+    dispatch(tr);
+    view.focus();
+    return true;
+  }
+  // Regular selection
+  const { from, to, empty } = sel;
   if (empty) {
     console.warn('[applyHighlight] selection is empty — select text first');
     return false;
