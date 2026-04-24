@@ -49,6 +49,7 @@ import {
   underlineMark, toggleUnderline,
   alignPlugin, applyAlign, getCurrentAlign,
   serializeAlignments, restoreAlignments,
+  resetHtmlMarkParseState,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 import type { AlignValue } from '../lib/milkdown-plugins';
@@ -584,6 +585,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (!filePath) { setContent(''); return; }
     editorRef.current = null;
     setLoading(true);
+    // Reset the module-level open-tag flags used by the jn_color/jn_highlight/
+    // jn_underline parseMarkdown runners. If a previous file had unbalanced
+    // HTML (shouldn't happen, but defense in depth) a flag could still be set
+    // at this point and cause incorrect mark application in the new file.
+    resetHtmlMarkParseState();
     apiFetch(`/api/file?path=${encodeURIComponent(filePath)}`)
       .then(r => r.ok ? r.text() : Promise.reject(new Error('Load failed')))
       .then(text => { setContent(text); setEditorKey(k => k + 1); })

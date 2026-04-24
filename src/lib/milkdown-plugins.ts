@@ -994,16 +994,39 @@ function liftMultipleListItems(state: any, dispatch: any, listItemType: any): bo
 
 // ─── Font color & highlight marks ────────────────────────────────────────────
 //
-// These are Milkdown `$markSchema` plugins that inject two new marks:
-//   jn_color     — renders as <span style="color: ...">
-//   jn_highlight — renders as <span style="background-color: ...">
+// These are Milkdown `$markSchema` plugins that inject three HTML marks:
+//   jn_color     — renders as <span data-jn-color="..." style="color: ...">
+//   jn_highlight — renders as <span data-jn-highlight="..." style="background: ...">
+//   jn_underline — renders as <u>
 //
-// Uses $markSchema (not bare $mark) for proper context integration and
-// includes parseMarkdown / toMarkdown stubs so marks survive round-trips
-// (serialized as HTML spans in the markdown).
+// Markdown round-trip:
+//   Saving (toMarkdown): emits a complete self-contained <span>text</span>
+//     as a single 'html' AST node. addNode returns truthy so the serializer
+//     skips the separate text-child emission, avoiding duplication.
 //
-// `applyFontColor` and `applyHighlight` are called from the toolbar and use
-// ProseMirror transactions to add/remove these marks on the current selection.
+//   Loading (parseMarkdown): remark splits inline HTML into THREE siblings —
+//     the opening tag node, the plain text node, the closing tag node. We
+//     handle this symmetrically: the opening-tag runner calls openMark and
+//     flips a module-level flag; the plain text node in between is rendered
+//     normally by the parser but inherits marks from state.#marks (so it
+//     gets our mark applied); the closing-tag runner calls closeMark.
+//
+//   The flags are module-level because each parse pass runs single-threaded
+//   and we need the closing-tag matcher to know whether a matching opening
+//   tag was seen earlier in the same document. The flags self-reset at the
+//   end of each paragraph via the symmetric close; any unbalanced HTML in
+//   user content would leave a flag set, which we defensively reset at the
+//   start of each file load (see resetHtmlMarkParseState).
+let _jnColorOpen = false;
+let _jnHighlightOpen = false;
+let _jnUnderlineOpen = false;
+
+/** Call before loading a new file to clear any leftover open-tag state from prior parses. */
+export function resetHtmlMarkParseState(): void {
+  _jnColorOpen = false;
+  _jnHighlightOpen = false;
+  _jnUnderlineOpen = false;
+}
 
 export const fontColorMark = $markSchema('jn_color', () => ({
   attrs: { color: { default: '#000000' } },
@@ -1023,21 +1046,27 @@ export const fontColorMark = $markSchema('jn_color', () => ({
     0,
   ],
   parseMarkdown: {
-    // Match inline HTML nodes that carry our data attribute
+    // Remark splits inline HTML across 3 siblings (open tag, text, close tag).
+    // Match both the opening <span data-jn-color=...> and the paired </span>;
+    // open and close the mark symmetrically so the plain text in between
+    // inherits the mark via the parser's state.#marks.
     match: (node: any) =>
-      node.type === 'html' && /data-jn-color/.test(node.value ?? ''),
+      node.type === 'html' &&
+      (/^<span[^>]*\bdata-jn-color=/i.test(node.value ?? '')
+        || (/^<\/span>\s*$/i.test(node.value ?? '') && _jnColorOpen)),
     runner: (state: any, node: any, markType: any) => {
-      // Extract the color from the raw HTML value
-      const colorMatch = (node.value ?? '').match(/data-jn-color="([^"]+)"/);
-      const color = colorMatch ? colorMatch[1] : '#000000';
-      // Extract inner text content
-      const textMatch = (node.value ?? '').match(/>([^<]*)<\/span>/);
-      const text = textMatch ? textMatch[1] : '';
-      if (text) {
-        state.openMark(markType, { color });
-        state.addNode('text', undefined, text);
-        state.closeMark(markType);
+      const val = node.value ?? '';
+      if (/^<\/span>\s*$/i.test(val)) {
+        if (_jnColorOpen) {
+          state.closeMark(markType);
+          _jnColorOpen = false;
+        }
+        return;
       }
+      const colorMatch = val.match(/data-jn-color="([^"]+)"/);
+      const color = colorMatch ? colorMatch[1] : '#000000';
+      state.openMark(markType, { color });
+      _jnColorOpen = true;
     },
   },
   toMarkdown: {
@@ -1072,18 +1101,32 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
     0,
   ],
   parseMarkdown: {
+    // Remark parses inline HTML as THREE separate siblings: opening <span>,
+    // text, closing </span>. The match+runner are called once per node.
+    // We match on both the opening tag (to open the mark) AND the closing
+    // </span> (to close it). The text in between is parsed by remark's own
+    // text handler, which picks up the currently-open marks from state.#marks.
+    // This is the symmetric pattern the parser state was designed for.
     match: (node: any) =>
-      node.type === 'html' && /data-jn-highlight/.test(node.value ?? ''),
+      node.type === 'html' &&
+      (/^<span[^>]*\bdata-jn-highlight=/i.test(node.value ?? '')
+        || (/^<\/span>\s*$/i.test(node.value ?? '') && _jnHighlightOpen)),
     runner: (state: any, node: any, markType: any) => {
-      const colorMatch = (node.value ?? '').match(/data-jn-highlight="([^"]+)"/);
-      const color = colorMatch ? colorMatch[1] : '#ffeb3b';
-      const textMatch = (node.value ?? '').match(/>([^<]*)<\/span>/);
-      const text = textMatch ? textMatch[1] : '';
-      if (text) {
-        state.openMark(markType, { color });
-        state.addNode('text', undefined, text);
-        state.closeMark(markType);
+      const val = node.value ?? '';
+      if (/^<\/span>\s*$/i.test(val)) {
+        // Closing tag — close the mark if we have one open
+        if (_jnHighlightOpen) {
+          state.closeMark(markType);
+          _jnHighlightOpen = false;
+        }
+        return;
       }
+      // Opening tag — extract the color and open the mark. The next
+      // sibling text node will be created with this mark applied.
+      const colorMatch = val.match(/data-jn-highlight="([^"]+)"/);
+      const color = colorMatch ? colorMatch[1] : '#ffeb3b';
+      state.openMark(markType, { color });
+      _jnHighlightOpen = true;
     },
   },
   toMarkdown: {
@@ -1106,17 +1149,24 @@ export const underlineMark = $markSchema('jn_underline', () => ({
   parseDOM: [{ tag: 'u' }, { tag: 'span[data-jn-underline]' }],
   toDOM: () => ['u', { 'data-jn-underline': '1' }, 0],
   parseMarkdown: {
+    // Remark splits inline HTML across 3 siblings: <u>, text, </u>.
+    // Match the opening AND the matching closing tag; open/close the mark
+    // symmetrically so the text between inherits it.
     match: (node: any) =>
       node.type === 'html' &&
-      (/^<u[\s>]/i.test(node.value ?? '') || /data-jn-underline/.test(node.value ?? '')),
+      (/^<u(\s|>)/i.test(node.value ?? '')
+        || (/^<\/u>\s*$/i.test(node.value ?? '') && _jnUnderlineOpen)),
     runner: (state: any, node: any, markType: any) => {
-      const textMatch = (node.value ?? '').match(/>([^<]*)<\/(?:u|span)>/i);
-      const text = textMatch ? textMatch[1] : '';
-      if (text) {
-        state.openMark(markType);
-        state.addNode('text', undefined, text);
-        state.closeMark(markType);
+      const val = node.value ?? '';
+      if (/^<\/u>\s*$/i.test(val)) {
+        if (_jnUnderlineOpen) {
+          state.closeMark(markType);
+          _jnUnderlineOpen = false;
+        }
+        return;
       }
+      state.openMark(markType);
+      _jnUnderlineOpen = true;
     },
   },
   toMarkdown: {
