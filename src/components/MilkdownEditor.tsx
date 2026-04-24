@@ -36,6 +36,7 @@ import {
   AlignLeft, AlignCenter, AlignRight,
   Indent, Outdent, ChevronDown,
   Scissors, Copy, Clipboard,
+  Search, Trash2, X, Replace, ChevronUp,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
@@ -51,6 +52,7 @@ import {
   alignPlugin, applyAlign, getCurrentAlign,
   serializeAlignments, restoreAlignments,
   jnHtmlMarksRemarkPlugin,
+  findPlugin,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 import type { AlignValue } from '../lib/milkdown-plugins';
@@ -209,68 +211,100 @@ const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
 const FONT_COLORS = [
-  { label: 'Default',      color: null },
-  { label: 'Red',          color: '#e53e3e' },
-  { label: 'Orange',       color: '#dd6b20' },
-  { label: 'Yellow',       color: '#d69e2e' },
-  { label: 'Green',        color: '#38a169' },
-  { label: 'Teal',         color: '#00c882' },
-  { label: 'Blue',         color: '#3182ce' },
-  { label: 'Purple',       color: '#805ad5' },
-  { label: 'Pink',         color: '#d53f8c' },
-  { label: 'Gray',         color: '#718096' },
-  { label: 'White',        color: '#f7fafc' },
-  { label: 'Soft Red',     color: '#fc8181' },
-  { label: 'Soft Orange',  color: '#f6ad55' },
-  { label: 'Soft Yellow',  color: '#f6e05e' },
-  { label: 'Soft Green',   color: '#68d391' },
-  { label: 'Soft Blue',    color: '#63b3ed' },
-  { label: 'Soft Purple',  color: '#b794f4' },
-  { label: 'Soft Pink',    color: '#f687b3' },
-  { label: 'Slate',        color: '#a0aec0' },
-  { label: 'Brown',        color: '#975a16' },
-  { label: 'Crimson',      color: '#c53030' },
-  { label: 'Navy',         color: '#2b6cb0' },
+  { label: 'Default',        color: null },
+  // Vivid — readable on dark bg
+  { label: 'Red',            color: '#e53e3e' },
+  { label: 'Orange',         color: '#dd6b20' },
+  { label: 'Yellow',         color: '#d69e2e' },
+  { label: 'Green',          color: '#38a169' },
+  { label: 'Teal',           color: '#00c882' },
+  { label: 'Blue',           color: '#3182ce' },
+  { label: 'Purple',         color: '#805ad5' },
+  { label: 'Pink',           color: '#d53f8c' },
+  { label: 'Gray',           color: '#718096' },
+  { label: 'White',          color: '#f7fafc' },
+  // Soft pastels — great on dark backgrounds
+  { label: 'Soft Red',       color: '#fc8181' },
+  { label: 'Soft Orange',    color: '#f6ad55' },
+  { label: 'Soft Yellow',    color: '#f6e05e' },
+  { label: 'Soft Green',     color: '#68d391' },
+  { label: 'Soft Blue',      color: '#63b3ed' },
+  { label: 'Soft Purple',    color: '#b794f4' },
+  { label: 'Soft Pink',      color: '#f687b3' },
+  { label: 'Slate',          color: '#a0aec0' },
+  // Professional / editorial
+  { label: 'Brown',          color: '#975a16' },
+  { label: 'Crimson',        color: '#c53030' },
+  { label: 'Navy',           color: '#2b6cb0' },
+  // New dark-mode professional additions
+  { label: 'Cyan',           color: '#00bcd4' },
+  { label: 'Lime',           color: '#84cc16' },
+  { label: 'Amber',          color: '#f59e0b' },
+  { label: 'Indigo',         color: '#6366f1' },
+  { label: 'Coral',          color: '#f87171' },
+  { label: 'Mint',           color: '#34d399' },
+  { label: 'Sky',            color: '#38bdf8' },
+  { label: 'Violet',         color: '#a78bfa' },
+  { label: 'Rose',           color: '#fb7185' },
+  { label: 'Gold',           color: '#fbbf24' },
 ];
 
 const HIGHLIGHT_COLORS = [
-  { label: 'None',         color: null },
-  { label: 'Yellow',       color: 'rgba(253,230,138,0.85)' },
-  { label: 'Green',        color: 'rgba(187,247,208,0.85)' },
-  { label: 'Blue',         color: 'rgba(191,219,254,0.85)' },
-  { label: 'Pink',         color: 'rgba(251,207,232,0.85)' },
-  { label: 'Purple',       color: 'rgba(221,214,254,0.85)' },
-  { label: 'Orange',       color: 'rgba(254,215,170,0.85)' },
-  { label: 'Red',          color: 'rgba(254,202,202,0.85)' },
-  { label: 'Teal',         color: 'rgba(167,243,208,0.85)' },
-  { label: 'Lemon',        color: 'rgba(254,249,195,0.85)' },
-  { label: 'Lilac',        color: 'rgba(233,213,255,0.85)' },
-  { label: 'Blush',        color: 'rgba(255,228,230,0.85)' },
-  { label: 'Sky',          color: 'rgba(224,242,254,0.85)' },
-  { label: 'Mint',         color: 'rgba(209,250,229,0.85)' },
-  { label: 'Peach',        color: 'rgba(255,237,213,0.85)' },
-  { label: 'Lavender',     color: 'rgba(237,233,254,0.85)' },
-  { label: 'Cream',        color: 'rgba(254,252,191,0.85)' },
-  { label: 'Powder',       color: 'rgba(190,227,248,0.85)' },
+  { label: 'None',           color: null },
+  // Existing
+  { label: 'Yellow',         color: 'rgba(253,230,138,0.85)' },
+  { label: 'Green',          color: 'rgba(187,247,208,0.85)' },
+  { label: 'Blue',           color: 'rgba(191,219,254,0.85)' },
+  { label: 'Pink',           color: 'rgba(251,207,232,0.85)' },
+  { label: 'Purple',         color: 'rgba(221,214,254,0.85)' },
+  { label: 'Orange',         color: 'rgba(254,215,170,0.85)' },
+  { label: 'Red',            color: 'rgba(254,202,202,0.85)' },
+  { label: 'Teal',           color: 'rgba(167,243,208,0.85)' },
+  { label: 'Lemon',          color: 'rgba(254,249,195,0.85)' },
+  { label: 'Lilac',          color: 'rgba(233,213,255,0.85)' },
+  { label: 'Blush',          color: 'rgba(255,228,230,0.85)' },
+  { label: 'Sky',            color: 'rgba(224,242,254,0.85)' },
+  { label: 'Mint',           color: 'rgba(209,250,229,0.85)' },
+  { label: 'Peach',          color: 'rgba(255,237,213,0.85)' },
+  { label: 'Lavender',       color: 'rgba(237,233,254,0.85)' },
+  { label: 'Cream',          color: 'rgba(254,252,191,0.85)' },
+  { label: 'Powder',         color: 'rgba(190,227,248,0.85)' },
+  // New dark-mode-friendly semi-opaque highlights
+  { label: 'Dark Teal',      color: 'rgba(0,200,130,0.25)' },
+  { label: 'Dark Blue',      color: 'rgba(59,130,246,0.30)' },
+  { label: 'Dark Purple',    color: 'rgba(139,92,246,0.30)' },
+  { label: 'Dark Red',       color: 'rgba(239,68,68,0.28)' },
+  { label: 'Dark Orange',    color: 'rgba(249,115,22,0.28)' },
+  { label: 'Dark Yellow',    color: 'rgba(234,179,8,0.30)' },
+  { label: 'Dark Green',     color: 'rgba(34,197,94,0.25)' },
+  { label: 'Dark Pink',      color: 'rgba(236,72,153,0.25)' },
 ];
 
 const TABLE_THEMES = [
-  { id: '',          label: 'Default',    preview: ['#363636', '#1e1e1e'] },
-  { id: 'sky',       label: 'Sky',        preview: ['#bfdbfe', '#eff6ff'] },
-  { id: 'mint',      label: 'Mint',       preview: ['#bbf7d0', '#f0fdf4'] },
-  { id: 'peach',     label: 'Peach',      preview: ['#fed7aa', '#fff7ed'] },
-  { id: 'lavender',  label: 'Lavender',   preview: ['#ddd6fe', '#f5f3ff'] },
-  { id: 'rose',      label: 'Rose',       preview: ['#fecdd3', '#fff1f2'] },
-  { id: 'lemon',     label: 'Lemon',      preview: ['#fef08a', '#fefce8'] },
-  { id: 'slate',     label: 'Slate',      preview: ['#cbd5e1', '#f8fafc'] },
-  { id: 'lilac',     label: 'Lilac',      preview: ['#e9d8fd', '#faf5ff'] },
-  { id: 'blush',     label: 'Blush',      preview: ['#fde8e8', '#fff5f5'] },
-  { id: 'sage',      label: 'Sage',       preview: ['#c6f6d5', '#f0fff4'] },
-  { id: 'cream',     label: 'Cream',      preview: ['#fefcbf', '#fffff0'] },
-  { id: 'powder',    label: 'Powder',     preview: ['#bee3f8', '#ebf8ff'] },
-  { id: 'sand',      label: 'Sand',       preview: ['#fde8c8', '#fffaf0'] },
-  { id: 'mist',      label: 'Mist',       preview: ['#e2e8f0', '#f7fafc'] },
-  { id: 'coral',     label: 'Coral',      preview: ['#feb2b2', '#fff5f5'] },
+  { id: '',           label: 'Default',     preview: ['#363636', '#1e1e1e'] },
+  // ── Dark-native themes (look great on dark backgrounds) ──
+  { id: 'carbon',     label: 'Carbon',      preview: ['#374151', '#1f2937'] },
+  { id: 'ocean',      label: 'Ocean',       preview: ['#1e3a5f', '#162032'] },
+  { id: 'forest',     label: 'Forest',      preview: ['#1a3a2a', '#122518'] },
+  { id: 'midnight',   label: 'Midnight',    preview: ['#2d2058', '#1a1035'] },
+  { id: 'ember',      label: 'Ember',       preview: ['#7c2d12', '#3b0d06'] },
+  { id: 'steel',      label: 'Steel',       preview: ['#1e3a4c', '#0f2030'] },
+  // ── Light themes (work on light backgrounds) ──
+  { id: 'sky',        label: 'Sky',         preview: ['#bfdbfe', '#eff6ff'] },
+  { id: 'mint',       label: 'Mint',        preview: ['#bbf7d0', '#f0fdf4'] },
+  { id: 'peach',      label: 'Peach',       preview: ['#fed7aa', '#fff7ed'] },
+  { id: 'lavender',   label: 'Lavender',    preview: ['#ddd6fe', '#f5f3ff'] },
+  { id: 'rose',       label: 'Rose',        preview: ['#fecdd3', '#fff1f2'] },
+  { id: 'lemon',      label: 'Lemon',       preview: ['#fef08a', '#fefce8'] },
+  { id: 'slate',      label: 'Slate',       preview: ['#cbd5e1', '#f8fafc'] },
+  { id: 'lilac',      label: 'Lilac',       preview: ['#e9d8fd', '#faf5ff'] },
+  { id: 'blush',      label: 'Blush',       preview: ['#fde8e8', '#fff5f5'] },
+  { id: 'sage',       label: 'Sage',        preview: ['#c6f6d5', '#f0fff4'] },
+  { id: 'cream',      label: 'Cream',       preview: ['#fefcbf', '#fffff0'] },
+  { id: 'powder',     label: 'Powder',      preview: ['#bee3f8', '#ebf8ff'] },
+  { id: 'sand',       label: 'Sand',        preview: ['#fde8c8', '#fffaf0'] },
+  { id: 'mist',       label: 'Mist',        preview: ['#e2e8f0', '#f7fafc'] },
+  { id: 'coral',      label: 'Coral',       preview: ['#feb2b2', '#fff5f5'] },
 ];
 
 // ─── Inner editor ─────────────────────────────────────────────────────────────
@@ -352,7 +386,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
       .use(checkboxClickPlugin)
-      .use(spellcheckPlugin),
+      .use(spellcheckPlugin)
+      .use(findPlugin),
     []
   );
 
@@ -416,6 +451,18 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   }
   const [spellPopup, setSpellPopup] = useState<SpellPopupState | null>(null);
   const spellPopupRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Find & Replace ────────────────────────────────────────────────────────
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [findMatchCase, setFindMatchCase] = useState(false);
+  const [findCurrentIdx, setFindCurrentIdx] = useState(0);
+  const [findMatches, setFindMatches] = useState<Array<{ from: number; to: number }>>([]);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const findPanelRef = useRef<HTMLDivElement | null>(null);
+  // Decoration plugin key for find highlights (managed separately from spellcheck)
+  const findDecoStateRef = useRef<{ query: string; matchCase: boolean; matches: Array<{from:number;to:number}>; currentIdx: number }>({ query: '', matchCase: false, matches: [], currentIdx: 0 });
 
   const editorRef = useRef<Editor | null>(null);
   const templateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -753,6 +800,165 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (!inst) return null;
     try { return inst.action((ctx: any) => ctx.get(editorViewCtx)); } catch { return null; }
   }, []);
+
+  // ── Delete the entire table containing the cursor ─────────────────────────
+  const cmdDeleteTable = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    const { state, dispatch } = view;
+    const { $from } = state.selection;
+    for (let d = $from.depth; d >= 0; d--) {
+      if ($from.node(d).type.name === 'table') {
+        const tableStart = $from.before(d);
+        const tableEnd = tableStart + $from.node(d).nodeSize;
+        dispatch(state.tr.delete(tableStart, tableEnd).scrollIntoView());
+        return;
+      }
+    }
+  }, [getView]);
+
+  // ── Find & Replace engine ─────────────────────────────────────────────────
+  // Finds matches in visible text only (doc.textBetween with block separator)
+  // so markdown syntax tokens are never matched or replaced.
+  const runFind = useCallback((query: string, matchCase: boolean, doc?: any): Array<{ from: number; to: number }> => {
+    const view = getView();
+    if (!view && !doc) return [];
+    const pmDoc = doc ?? view!.state.doc;
+    if (!query) return [];
+    const matches: Array<{ from: number; to: number }> = [];
+    const flags = matchCase ? 'g' : 'gi';
+    let re: RegExp;
+    try { re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags); }
+    catch { return []; }
+
+    pmDoc.descendants((node: any, pos: number, parent: any) => {
+      // Skip code blocks and HTML nodes — only search visible prose text
+      const typeName = node.type?.name ?? '';
+      const parentType = parent?.type?.name ?? '';
+      if (['code_block','fence','html_block','html_inline'].includes(typeName)) return false;
+      if (['code_block','fence','html_block','html_inline'].includes(parentType)) return false;
+      if (!node.isText) return true;
+      const text = node.text ?? '';
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        matches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
+      }
+      return false;
+    });
+    return matches;
+  }, [getView]);
+
+  // Apply find highlight decorations via a DOM overlay approach
+  // (We track matches in state and render highlighted spans in the ProseMirror
+  //  view using the existing decoration infrastructure)
+  const applyFindDecorations = useCallback((query: string, matchCase: boolean, idx: number) => {
+    const view = getView();
+    if (!view) return;
+    const matches = runFind(query, matchCase, view.state.doc);
+    setFindMatches(matches);
+    setFindCurrentIdx(Math.min(idx, Math.max(0, matches.length - 1)));
+    findDecoStateRef.current = { query, matchCase, matches, currentIdx: Math.min(idx, Math.max(0, matches.length - 1)) };
+    // Scroll current match into view
+    if (matches.length > 0) {
+      const cur = matches[Math.min(idx, matches.length - 1)];
+      try {
+        const coords = view.coordsAtPos(cur.from);
+        const container = editorContainerRef.current;
+        if (container && coords) {
+          const rect = container.getBoundingClientRect();
+          const relTop = coords.top - rect.top + container.scrollTop - 100;
+          container.scrollTo({ top: Math.max(0, relTop), behavior: 'smooth' });
+        }
+      } catch { /* ignore */ }
+    }
+    // Dispatch a no-op transaction to trigger re-render with new decorations
+    view.dispatch(view.state.tr.setMeta('jn-find-update', { query, matchCase, matches, currentIdx: Math.min(idx, Math.max(0, matches.length - 1)) }));
+  }, [getView, runFind]);
+
+  const findNext = useCallback(() => {
+    const { query, matchCase, matches } = findDecoStateRef.current;
+    if (!matches.length) return;
+    const next = (findDecoStateRef.current.currentIdx + 1) % matches.length;
+    applyFindDecorations(query, matchCase, next);
+  }, [applyFindDecorations]);
+
+  const findPrev = useCallback(() => {
+    const { query, matchCase, matches } = findDecoStateRef.current;
+    if (!matches.length) return;
+    const prev = (findDecoStateRef.current.currentIdx - 1 + matches.length) % matches.length;
+    applyFindDecorations(query, matchCase, prev);
+  }, [applyFindDecorations]);
+
+  const doReplace = useCallback((replaceWith: string) => {
+    const view = getView();
+    if (!view) return;
+    const { matches, currentIdx } = findDecoStateRef.current;
+    if (!matches.length) return;
+    const m = matches[currentIdx];
+    const tr = view.state.tr.replaceWith(m.from, m.to, view.state.schema.text(replaceWith));
+    view.dispatch(tr);
+    // Re-run find after replacement
+    const { query, matchCase } = findDecoStateRef.current;
+    setTimeout(() => applyFindDecorations(query, matchCase, Math.min(currentIdx, matches.length - 2)), 50);
+  }, [getView, applyFindDecorations]);
+
+  const doReplaceAll = useCallback((replaceWith: string) => {
+    const view = getView();
+    if (!view) return;
+    const { query, matchCase } = findDecoStateRef.current;
+    const matches = runFind(query, matchCase, view.state.doc);
+    if (!matches.length) return;
+    // Apply replacements back-to-front so positions stay valid
+    let tr = view.state.tr;
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const m = matches[i];
+      if (replaceWith) {
+        tr = tr.replaceWith(m.from, m.to, view.state.schema.text(replaceWith));
+      } else {
+        tr = tr.delete(m.from, m.to);
+      }
+    }
+    view.dispatch(tr);
+    setFindMatches([]);
+    setFindCurrentIdx(0);
+    findDecoStateRef.current = { ...findDecoStateRef.current, matches: [], currentIdx: 0 };
+  }, [getView, runFind]);
+
+  // Close find panel and clear decorations
+  const closeFindReplace = useCallback(() => {
+    setShowFindReplace(false);
+    setFindQuery('');
+    setReplaceQuery('');
+    setFindMatches([]);
+    setFindCurrentIdx(0);
+    findDecoStateRef.current = { query: '', matchCase: false, matches: [], currentIdx: 0 };
+    const view = getView();
+    if (view) view.dispatch(view.state.tr.setMeta('jn-find-update', { query: '', matchCase: false, matches: [], currentIdx: 0 }));
+    view?.focus();
+  }, [getView]);
+
+  // Ctrl+F / Ctrl+H keyboard shortcut
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setShowFindReplace(true);
+        setReplaceQuery('');
+        setTimeout(() => findInputRef.current?.focus(), 50);
+      }
+      if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        setShowFindReplace(true);
+        setTimeout(() => findInputRef.current?.focus(), 50);
+      }
+      if (e.key === 'Escape' && showFindReplace) {
+        closeFindReplace();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [showFindReplace, closeFindReplace]);
 
   // Track cursor line/col — must be after getView is defined
   useEffect(() => {
@@ -1264,10 +1470,25 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               </select>
             </div>
           </div>
-          {/* Right actions — font size + template + bookmark */}
+          {/* Right actions — font size + find + template + bookmark */}
           <div className="flex items-center gap-0.5 px-2 flex-shrink-0">
             <ToolBtn title="Larger (Ctrl++)" onClick={() => setFontSize(p => Math.min(p + 1, 40))} style={{ fontWeight: 700, fontSize: 11 }}>A⁺</ToolBtn>
             <ToolBtn title="Smaller (Ctrl+-)" onClick={() => setFontSize(p => Math.max(p - 1, 8))} style={{ fontWeight: 500, fontSize: 10 }}>A⁻</ToolBtn>
+            <div className="format-toolbar-separator" />
+            {/* Find & Replace toggle */}
+            <button
+              onClick={() => {
+                setShowFindReplace(v => {
+                  if (v) { closeFindReplace(); return false; }
+                  setTimeout(() => findInputRef.current?.focus(), 50);
+                  return true;
+                });
+              }}
+              className={`p-1.5 rounded transition-colors ${showFindReplace ? 'text-interactive-accent bg-interactive-accent/10' : 'text-text-muted hover:text-text-normal hover:bg-bg-secondary'}`}
+              title="Find &amp; Replace (Ctrl+F)"
+            >
+              <Search size={13} />
+            </button>
             <div className="format-toolbar-separator" />
             <div className="relative" ref={templateMenuRef}>
               <button onClick={() => setIsTemplateMenuOpen(o => !o)}
@@ -1361,6 +1582,14 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           <span className="text-xs text-text-muted px-1 select-none" style={{ opacity: 0.4 }}>Tab / Shift+Tab to navigate cells</span>
 
           <div className="format-toolbar-separator" />
+          {/* Delete entire table */}
+          <ToolBtn title="Delete entire table" danger onClick={cmdDeleteTable}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 10, fontWeight: 700 }}>
+              <Trash2 size={11} />
+              <span>Table</span>
+            </span>
+          </ToolBtn>
+          <div className="format-toolbar-separator" />
           {/* Table design themes — compact dropdown button */}
           <div className="relative" style={{ display: 'inline-flex', alignItems: 'center' }}>
             <button
@@ -1428,6 +1657,96 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Find & Replace panel */}
+      {showFindReplace && (
+        <div
+          ref={findPanelRef}
+          className="jn-find-panel"
+        >
+          {/* Find row */}
+          <div className="jn-find-row">
+            <Search size={12} className="jn-find-icon" />
+            <input
+              ref={findInputRef}
+              className="jn-find-input"
+              placeholder="Find…"
+              value={findQuery}
+              onChange={e => {
+                const q = e.target.value;
+                setFindQuery(q);
+                setFindCurrentIdx(0);
+                applyFindDecorations(q, findMatchCase, 0);
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.shiftKey ? findPrev() : findNext(); }
+                if (e.key === 'Escape') closeFindReplace();
+              }}
+              spellCheck={false}
+            />
+            {/* Match count */}
+            <span className="jn-find-count">
+              {findQuery
+                ? findMatches.length > 0
+                  ? `${findCurrentIdx + 1}/${findMatches.length}`
+                  : 'No results'
+                : ''}
+            </span>
+            {/* Case-sensitive toggle */}
+            <button
+              className={`jn-find-btn${findMatchCase ? ' active' : ''}`}
+              title="Match case"
+              onClick={() => {
+                const mc = !findMatchCase;
+                setFindMatchCase(mc);
+                applyFindDecorations(findQuery, mc, 0);
+              }}
+            >
+              Aa
+            </button>
+            <button className="jn-find-btn" title="Previous match (Shift+Enter)" onClick={findPrev} disabled={!findMatches.length}>
+              <ChevronUp size={12} />
+            </button>
+            <button className="jn-find-btn" title="Next match (Enter)" onClick={findNext} disabled={!findMatches.length}>
+              <ChevronDown size={12} />
+            </button>
+            <button className="jn-find-btn" title="Close (Esc)" onClick={closeFindReplace}>
+              <X size={12} />
+            </button>
+          </div>
+          {/* Replace row */}
+          <div className="jn-find-row">
+            <Replace size={12} className="jn-find-icon" />
+            <input
+              className="jn-find-input"
+              placeholder="Replace with…"
+              value={replaceQuery}
+              onChange={e => setReplaceQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') doReplace(replaceQuery);
+                if (e.key === 'Escape') closeFindReplace();
+              }}
+              spellCheck={false}
+            />
+            <button
+              className="jn-find-action-btn"
+              title="Replace current match"
+              onClick={() => doReplace(replaceQuery)}
+              disabled={!findMatches.length}
+            >
+              Replace
+            </button>
+            <button
+              className="jn-find-action-btn"
+              title="Replace all matches"
+              onClick={() => doReplaceAll(replaceQuery)}
+              disabled={!findMatches.length}
+            >
+              All
+            </button>
           </div>
         </div>
       )}

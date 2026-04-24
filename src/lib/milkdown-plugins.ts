@@ -1860,3 +1860,58 @@ export function restoreAlignments(view: any, entries: Array<{ index: number; ali
   }
   if (any) view.dispatch(tr);
 }
+
+// ─── Find & Replace highlight decoration plugin ──────────────────────────────
+//
+// A lightweight ProseMirror plugin that renders find-match highlights on top of
+// the document text. Matches are provided via transaction meta `jn-find-update`
+// which carries { query, matchCase, matches, currentIdx }.
+//
+// Current match gets `.jn-find-current`, all others get `.jn-find-match`.
+
+export const FIND_META = 'jn-find-update';
+export const findPluginKey = new PluginKey('jn-find');
+
+interface FindState {
+  matches: Array<{ from: number; to: number }>;
+  currentIdx: number;
+}
+
+export const findPlugin = $prose(() => {
+  return new Plugin<FindState>({
+    key: findPluginKey,
+    state: {
+      init: (): FindState => ({ matches: [], currentIdx: 0 }),
+      apply(tr, prev): FindState {
+        const meta = tr.getMeta(FIND_META) as { matches: Array<{from:number;to:number}>; currentIdx: number } | undefined;
+        if (meta) {
+          return { matches: meta.matches ?? [], currentIdx: meta.currentIdx ?? 0 };
+        }
+        // Remap positions through doc changes
+        if (tr.docChanged && prev.matches.length > 0) {
+          const remapped = prev.matches.map(m => ({
+            from: tr.mapping.map(m.from),
+            to:   tr.mapping.map(m.to),
+          })).filter(m => m.to > m.from);
+          return { matches: remapped, currentIdx: Math.min(prev.currentIdx, Math.max(0, remapped.length - 1)) };
+        }
+        return prev;
+      },
+    },
+    props: {
+      decorations(state) {
+        const ps = findPluginKey.getState(state) as FindState | undefined;
+        if (!ps || ps.matches.length === 0) return DecorationSet.empty;
+        const decos: Decoration[] = [];
+        ps.matches.forEach((m, i) => {
+          if (m.to <= m.from) return;
+          decos.push(Decoration.inline(m.from, m.to, {
+            class: i === ps.currentIdx ? 'jn-find-current' : 'jn-find-match',
+            nodeName: 'mark',
+          }));
+        });
+        return DecorationSet.create(state.doc, decos);
+      },
+    },
+  });
+});

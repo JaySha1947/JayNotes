@@ -36,6 +36,69 @@ import NSpell from 'nspell';
 let _spell: any = null;
 let _initPromise: Promise<void> | null = null;
 
+// ─── Professional / modern vocabulary supplement ──────────────────────────────
+// The Hunspell en-US dictionary predates many modern professional, tech, and
+// business terms. These words are correctly spelled but flagged as errors.
+// Adding them directly to the checker at init avoids false positives.
+const SUPPLEMENT_WORDS = [
+  // Business / strategy
+  'aspirational','actionable','scalable','scalability','synergy','synergize',
+  'ideate','ideation','learnings','deliverables','onboarding','offboarding',
+  'reskilling','upskilling','upskill','roadmap','roadmaps','touchpoint',
+  'touchpoints','swimlane','swimlanes','backlog','backlogs','sprint','sprints',
+  'scrum','kanban','agile','standup','standups','retro','retrospective',
+  'retrospectives','okr','okrs','kpi','kpis','sla','slas','roi','cta','ctas',
+  'persona','personas','stakeholder','stakeholders','deliverable',
+  'prioritization','prioritize','deprioritize','derisking','derisk',
+  'greenfield','brownfield','lifecycle','lifecycles','playbook','playbooks',
+  'runbook','runbooks','grooming','triaging','triage','triaged','kickoff',
+  'kickoffs','signoff','signoffs','rollout','rollouts','operationalize',
+  'operationalized','operationalizing','monetize','monetization','gamify',
+  'gamification','incentivize','incentivization',
+  // Tech / software
+  'microservice','microservices','serverless','kubernetes','containerized',
+  'containerize','devops','devsecops','gitops','ci','cd','cicd','webhook',
+  'webhooks','api','apis','sdk','sdks','cli','gui','ui','ux','frontend',
+  'backend','fullstack','codebase','refactor','refactored','refactoring',
+  'repo','repos','repository','repositorie','linter','linting','linted',
+  'prettier','typescript','javascript','javascript','jsx','tsx','css',
+  'html','json','yaml','toml','markdown','regex','regexp','nullable',
+  'nonnull','async','await','callback','callbacks','middleware','middlewares',
+  'localhost','localhost','hotfix','hotfixes','bugfix','bugfixes','changelog',
+  'changelogs','versioning','semver','monorepo','monorepos','polyrepo',
+  'polyrepos','npm','pnpm','yarn','webpack','vite','esbuild','rollup',
+  'dockerfile','containerization','vm','vms','serverless','multicloud',
+  'multi-cloud','saas','paas','iaas','faas','baas','cms','crm','erp',
+  'analytics','dataset','datasets','datastore','datastores','blockchain',
+  'cryptocurrency','nft','nfts','decentralized','defi','metaverse',
+  // Data / AI
+  'dataset','datasets','dataframe','dataframes','preprocessing','preprocess',
+  'preprocessed','tokenize','tokenized','tokenization','tokenizer',
+  'tokenizers','embeddings','embedding','finetuning','finetune','finetuned',
+  'pretrained','inference','inferencing','overfitting','underfitting',
+  'hyperparameter','hyperparameters','backpropagation','feedforward',
+  'autoencoder','autoencoders','transformer','transformers','llm','llms',
+  'generative','multimodal','retrieval','rag','vectorstore','vectorstores',
+  'workflow','workflows','pipeline','pipelines','datapoint','datapoints',
+  // Common modern English
+  'suboptimal','nonoptimal','workaround','workarounds','impactful',
+  'bandwidth','mindset','mindsets','skillset','skillsets','toolset',
+  'toolsets','ecosystem','ecosystems','proactive','proactively',
+  'retroactive','retroactively','contextualize','contextualized','nuanced',
+  'granular','granularity','holistic','holistically','iterative','iteratively',
+  'overarching','hardcoded','hardcode','hardcoding','softcoded','softcode',
+  'plugin','plugins','addon','addons','popup','popups','dropdown','dropdowns',
+  'checkbox','checkboxes','tooltip','tooltips','modal','modals','sidebar',
+  'sidebars','navbar','navbars','toolbar','toolbars','wireframe','wireframes',
+  'mockup','mockups','prototype','prototypes','stylesheet','stylesheets',
+  'favicon','favicon','screenshot','screenshots','screencast','screencasts',
+  'workaround','workarounds','fallback','fallbacks','boilerplate','boilerplates',
+  'unsubscribe','resubscribe','onsite','offsite','offload','offloaded',
+  'onprem','on-prem','multi-tenant','multitenant','whitelabel','white-label',
+  'crowdsource','crowdsourced','crowdsourcing','geolocation','geolocate',
+  'autocomplete','autofill','autosave','autosaved',
+];
+
 async function initSpell(): Promise<void> {
   if (_spell) return;
   try {
@@ -50,6 +113,8 @@ async function initSpell(): Promise<void> {
       }),
     ]);
     _spell = NSpell(affText, dicText);
+    // Add professional/modern vocabulary supplement
+    for (const w of SUPPLEMENT_WORDS) _spell.add(w);
     // Restore personal dictionary from localStorage
     for (const w of getPersonalWords()) {
       _spell.add(w);

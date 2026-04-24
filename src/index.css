@@ -1748,3 +1748,255 @@ html.light .jn-tree-children::before {
 .jn-spell-action.danger:hover {
   color: var(--error);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Dark-mode-native table themes
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Carbon (professional dark gray) ────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--carbon table {
+  border-color: #4b5563 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--carbon th {
+  background: #374151 !important;
+  color: #e5e7eb !important;
+  font-weight: 600 !important;
+  border-color: #4b5563 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--carbon td {
+  background: #1f2937 !important;
+  color: #d1d5db !important;
+  border-color: #374151 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--carbon tr:nth-child(even) td {
+  background: #263141 !important;
+}
+
+/* ── Ocean (deep dark blue) ─────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean table {
+  border-color: #1e4d7b !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean th {
+  background: #1e3a5f !important;
+  color: #7dd3fc !important;
+  font-weight: 600 !important;
+  border-color: #1e4d7b !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean td {
+  background: #162032 !important;
+  color: #bae6fd !important;
+  border-color: #1e3a5f !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ocean tr:nth-child(even) td {
+  background: #1a2a40 !important;
+}
+
+/* ── Forest (deep dark green) ───────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest table {
+  border-color: #166534 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest th {
+  background: #1a3a2a !important;
+  color: #86efac !important;
+  font-weight: 600 !important;
+  border-color: #166534 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest td {
+  background: #122518 !important;
+  color: #bbf7d0 !important;
+  border-color: #1a3a2a !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--forest tr:nth-child(even) td {
+  background: #182e20 !important;
+}
+
+/* ── Midnight (dark purple / indigo) ────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--midnight table {
+  border-color: #4338ca !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--midnight th {
+  background: #2d2058 !important;
+  color: #c4b5fd !important;
+  font-weight: 600 !important;
+  border-color: #4338ca !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--midnight td {
+  background: #1a1035 !important;
+  color: #ddd6fe !important;
+  border-color: #2d2058 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--midnight tr:nth-child(even) td {
+  background: #221845 !important;
+}
+
+/* ── Ember (dark red / warm dark) ───────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--ember table {
+  border-color: #b91c1c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ember th {
+  background: #7c2d12 !important;
+  color: #fca5a5 !important;
+  font-weight: 600 !important;
+  border-color: #b91c1c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ember td {
+  background: #3b0d06 !important;
+  color: #fecaca !important;
+  border-color: #7c2d12 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--ember tr:nth-child(even) td {
+  background: #4a1008 !important;
+}
+
+/* ── Steel (dark teal / slate blue) ─────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--steel table {
+  border-color: #0e7490 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--steel th {
+  background: #1e3a4c !important;
+  color: #67e8f9 !important;
+  font-weight: 600 !important;
+  border-color: #0e7490 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--steel td {
+  background: #0f2030 !important;
+  color: #a5f3fc !important;
+  border-color: #1e3a4c !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--steel tr:nth-child(even) td {
+  background: #16293c !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Find & Replace panel
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.jn-find-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  z-index: 50;
+}
+
+.jn-find-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.jn-find-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.jn-find-input {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  color: var(--text-normal);
+  font-size: 12px;
+  padding: 3px 8px;
+  outline: none;
+  min-width: 0;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.jn-find-input:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(0,200,130,0.15);
+}
+.jn-find-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.jn-find-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 56px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.jn-find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.jn-find-btn:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--interactive-accent);
+}
+.jn-find-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.jn-find-btn.active {
+  background: rgba(0,200,130,0.15);
+  color: var(--interactive-accent);
+  border: 1px solid rgba(0,200,130,0.35);
+}
+
+.jn-find-action-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: all 0.1s;
+  white-space: nowrap;
+}
+.jn-find-action-btn:hover:not(:disabled) {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+  background: rgba(0,200,130,0.08);
+}
+.jn-find-action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Find & Replace match highlights (rendered as ProseMirror decorations)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* All matches */
+.milkdown-wrapper .editor mark.jn-find-match {
+  background: rgba(250,204,21,0.35) !important;
+  color: inherit !important;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(250,204,21,0.5);
+}
+
+/* Current (focused) match */
+.milkdown-wrapper .editor mark.jn-find-current {
+  background: rgba(250,204,21,0.75) !important;
+  color: #1a1a1a !important;
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px rgba(250,204,21,0.9);
+  font-weight: inherit;
+}
+
