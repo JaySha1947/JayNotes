@@ -28,9 +28,8 @@ import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import { $prose } from '@milkdown/utils';
 
-// nspell is CJS; Vite handles CJS interop fine for this package.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const NSpell = require('nspell');
+// nspell is CJS; Vite's CJS interop handles it correctly when imported with ESM syntax.
+import NSpell from 'nspell';
 
 // ─── Singleton spell-checker (async init) ────────────────────────────────────
 
