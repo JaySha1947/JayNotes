@@ -32,6 +32,9 @@ import {
   Bold, Italic, Strikethrough, List, ListOrdered,
   CheckSquare, Code, Quote, Minus, Table, AlertTriangle, RefreshCw,
   Palette, Highlighter,
+  Underline,
+  AlignLeft, AlignCenter, AlignRight,
+  Indent, Outdent, ChevronDown,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
@@ -39,11 +42,16 @@ import {
   setWikilinkFileList, setOpenFileCallback,
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
+  execIndent, execOutdent,
   fontColorMark, highlightMark, applyFontColor, applyHighlight,
   tableThemePlugin, setTableThemeForCurrent, getCurrentTableTheme,
   serializeTableThemes, restoreTableThemes,
+  underlineMark, toggleUnderline,
+  alignPlugin, applyAlign, getCurrentAlign,
+  serializeAlignments, restoreAlignments,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
+import type { AlignValue } from '../lib/milkdown-plugins';
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
 
@@ -299,6 +307,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(columnResizingPlugin)
       .use(fontColorMark)
       .use(highlightMark)
+      .use(underlineMark)
+      .use(alignPlugin)
       .use(tableThemePlugin)
       .use(resizableImageView)
       .use(listTabPlugin)
@@ -367,13 +377,69 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   currentFileRef.current = filePath;
   const sugRef = useRef(suggestions);
   sugRef.current = suggestions;
+  // ── Contextual formatting menu + F4 repeat-last-action state ────────────
+  // Hoisted up here so the close-ctx-menu useEffect (declared later near the
+  // other outside-click effects) can depend on `ctxMenu` without a
+  // "used-before-declaration" error.
+  //
+  // Last-used font color and highlight color are remembered so the main
+  // split-button can apply them in one click; the chevron beside each split
+  // opens the palette for picking a different color.
+  //
+  // F4 repeats the most recent formatting action on the current selection.
+  // Only formatting-type actions are recorded.
+
+  type RepeatableAction =
+    | { type: 'bold' | 'italic' | 'underline' | 'strike' | 'inlineCode' }
+    | { type: 'align'; align: AlignValue }
+    | { type: 'indent' | 'outdent' }
+    | { type: 'fontColor'; color: string | null }
+    | { type: 'highlight'; color: string | null };
+
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [ctxColorPos, setCtxColorPos] = useState<{ top: number; left: number } | null>(null);
+  const [ctxHighlightPos, setCtxHighlightPos] = useState<{ top: number; left: number } | null>(null);
+
+  // Last-used colors — default to the first actual color in each palette
+  const firstFontColor = FONT_COLORS.find(c => c.color)?.color ?? '#e53e3e';
+  const firstHighlight = HIGHLIGHT_COLORS.find(c => c.color)?.color ?? 'rgba(253,230,138,0.85)';
+  const lastFontColorRef = useRef<string>(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('jn-last-font-color')) || firstFontColor
+  );
+  const lastHighlightRef = useRef<string>(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('jn-last-highlight')) || firstHighlight
+  );
+  // Tiny state bump so the color-bar under the split buttons re-renders
+  // when the last-used color changes.
+  const [, bumpColorBars] = useState(0);
+  const rememberFontColor = (c: string | null) => {
+    if (c) {
+      lastFontColorRef.current = c;
+      try { localStorage.setItem('jn-last-font-color', c); } catch (_) { /* quota */ }
+      bumpColorBars(n => n + 1);
+    }
+  };
+  const rememberHighlight = (c: string | null) => {
+    if (c) {
+      lastHighlightRef.current = c;
+      try { localStorage.setItem('jn-last-highlight', c); } catch (_) { /* quota */ }
+      bumpColorBars(n => n + 1);
+    }
+  };
+
+  const lastActionRef = useRef<RepeatableAction | null>(null);
+  const recordAction = useCallback((action: RepeatableAction) => {
+    lastActionRef.current = action;
+  }, []);
+
   // Persist table themes to localStorage keyed by filePath. Populated by the
   // editor-ready effect; called by cmdTableTheme after every theme change.
   const persistThemesRef = useRef<(() => void) | null>(null);
+  // Same pattern for per-block alignment.
+  const persistAlignRef = useRef<(() => void) | null>(null);
 
   // Invoked once per editor mount (per file load). Restores persisted table
-  // themes from localStorage and installs a persistence function that gets
-  // called every time a theme changes.
+  // themes and alignments from localStorage and installs persistence functions.
   const handleEditorReady = useCallback(() => {
     const inst = editorRef.current;
     const path = currentFileRef.current;
@@ -395,7 +461,18 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       }
     } catch (_) { /* ignore corrupt entries */ }
 
-    // Install persistence function — closes over this specific view+path
+    // Restore alignments
+    try {
+      const raw = localStorage.getItem(`jn-align:${path}`);
+      if (raw) {
+        const entries = JSON.parse(raw) as Array<{ index: number; align: AlignValue }>;
+        if (Array.isArray(entries) && entries.length > 0) {
+          restoreAlignments(view, entries);
+        }
+      }
+    } catch (_) { /* ignore corrupt entries */ }
+
+    // Install persistence functions — closed over this view+path
     persistThemesRef.current = () => {
       const currentPath = currentFileRef.current;
       if (!currentPath) return;
@@ -407,6 +484,18 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           localStorage.setItem(`jn-themes:${currentPath}`, JSON.stringify(entries));
         }
       } catch (_) { /* quota / parse errors are non-fatal */ }
+    };
+    persistAlignRef.current = () => {
+      const currentPath = currentFileRef.current;
+      if (!currentPath) return;
+      try {
+        const entries = serializeAlignments(view.state);
+        if (entries.length === 0) {
+          localStorage.removeItem(`jn-align:${currentPath}`);
+        } else {
+          localStorage.setItem(`jn-align:${currentPath}`, JSON.stringify(entries));
+        }
+      } catch (_) { /* non-fatal */ }
     };
   }, []);
 
@@ -609,6 +698,36 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [colorPickerPos, highlightPickerPos]);
 
+  // Close the right-click ctx menu on: outside click, scroll, Escape, resize.
+  // The ctx menu's own button mousedowns call e.preventDefault() + stopPropagation
+  // so they don't dismiss the menu before the action runs.
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  const ctxColorPaletteRef = useRef<HTMLDivElement | null>(null);
+  const ctxHighlightPaletteRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => { setCtxMenu(null); setCtxColorPos(null); setCtxHighlightPos(null); };
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (ctxMenuRef.current?.contains(t)) return;
+      if (ctxColorPaletteRef.current?.contains(t)) return;
+      if (ctxHighlightPaletteRef.current?.contains(t)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const container = editorContainerRef.current;
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKey);
+    container?.addEventListener('scroll', close);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKey);
+      container?.removeEventListener('scroll', close);
+      window.removeEventListener('resize', close);
+    };
+  }, [ctxMenu]);
+
   // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
     const view = getView();
@@ -655,13 +774,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   }, [getView]);
 
   // Font color — restore saved selection (opening the picker can move focus)
-  // before applying the mark.
+  // before applying the mark. Also remembers last-used color and records the
+  // action for F4 repeat.
   const cmdColor = useCallback((color: string | null) => {
     const view = getView();
     if (!view) return;
     const saved = savedSelectionRef.current;
     if (saved) {
-      // Restore selection inside ProseMirror
       const tr = view.state.tr.setSelection(
         TextSelection.create(view.state.doc, saved.from, saved.to)
       );
@@ -669,8 +788,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       view.focus();
     }
     applyFontColor(view, color);
+    rememberFontColor(color);
+    recordAction({ type: 'fontColor', color });
     setColorPickerPos(null);
-  }, [getView]);
+    setCtxColorPos(null);
+  }, [getView, recordAction]);
 
   // Highlight — same selection restoration as font color.
   const cmdHighlight = useCallback((color: string | null) => {
@@ -685,8 +807,96 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       view.focus();
     }
     applyHighlight(view, color);
+    rememberHighlight(color);
+    recordAction({ type: 'highlight', color });
     setHighlightPickerPos(null);
-  }, [getView]);
+    setCtxHighlightPos(null);
+  }, [getView, recordAction]);
+
+  // ── Recording wrappers for F4-repeatable toolbar/ctx-menu actions ────────
+  // These are thin wrappers that delegate to the existing `cmd` helper but
+  // also call recordAction so F4 can replay them.
+  const cmdBold        = useCallback(() => { cmd(toggleStrongCommand.key);       recordAction({ type: 'bold' }); },       [cmd, recordAction]);
+  const cmdItalic      = useCallback(() => { cmd(toggleEmphasisCommand.key);     recordAction({ type: 'italic' }); },     [cmd, recordAction]);
+  const cmdStrike      = useCallback(() => { cmd(toggleStrikethroughCommand.key); recordAction({ type: 'strike' }); },    [cmd, recordAction]);
+  const cmdInlineCode  = useCallback(() => { cmd(toggleInlineCodeCommand.key);   recordAction({ type: 'inlineCode' }); }, [cmd, recordAction]);
+
+  const cmdUnderline = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    toggleUnderline(view);
+    recordAction({ type: 'underline' });
+  }, [getView, recordAction]);
+
+  const cmdAlign = useCallback((align: AlignValue) => {
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    applyAlign(view, align);
+    persistAlignRef.current?.();
+    recordAction({ type: 'align', align });
+  }, [getView, recordAction]);
+
+  const cmdIndent = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    if (execIndent(view)) recordAction({ type: 'indent' });
+  }, [getView, recordAction]);
+
+  const cmdOutdent = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    if (execOutdent(view)) recordAction({ type: 'outdent' });
+  }, [getView, recordAction]);
+
+  // Replay the last recorded action on the current selection.
+  // Intentionally does NOT re-record (would make F4 infinitely repeat itself).
+  const repeatLastAction = useCallback(() => {
+    const action = lastActionRef.current;
+    if (!action) return;
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+
+    switch (action.type) {
+      case 'bold':       cmd(toggleStrongCommand.key); break;
+      case 'italic':     cmd(toggleEmphasisCommand.key); break;
+      case 'strike':     cmd(toggleStrikethroughCommand.key); break;
+      case 'inlineCode': cmd(toggleInlineCodeCommand.key); break;
+      case 'underline':  toggleUnderline(view); break;
+      case 'align':
+        applyAlign(view, action.align);
+        persistAlignRef.current?.();
+        break;
+      case 'indent':     execIndent(view); break;
+      case 'outdent':    execOutdent(view); break;
+      case 'fontColor':
+        applyFontColor(view, action.color);
+        rememberFontColor(action.color);
+        break;
+      case 'highlight':
+        applyHighlight(view, action.color);
+        rememberHighlight(action.color);
+        break;
+    }
+  }, [cmd, getView]);
+
+  // F4 keydown — listen on window with capture so it wins over inner handlers
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'F4') return;
+      // Only trigger if the editor has focus (or the container has focus inside it)
+      const active = document.activeElement as HTMLElement | null;
+      const container = editorContainerRef.current;
+      if (!container) return;
+      if (!container.contains(active) && !container.contains(document.activeElement)) return;
+      e.preventDefault();
+      repeatLastAction();
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, [repeatLastAction]);
 
   // Apply a theme to the table containing the cursor. Uses a ProseMirror
   // decoration plugin (tableThemePlugin) to persist the class across ProseMirror
@@ -755,10 +965,11 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           {/* Toolbar — scrollable centre region */}
           <div className="flex-grow overflow-x-auto min-w-0">
             <div className="format-toolbar border-0 py-0.5 px-1 flex-nowrap" style={{ minWidth: 'max-content' }}>
-              <ToolBtn title="Bold (Ctrl+B)" onClick={() => cmd(toggleStrongCommand.key)}><Bold size={12} /></ToolBtn>
-              <ToolBtn title="Italic (Ctrl+I)" onClick={() => cmd(toggleEmphasisCommand.key)}><Italic size={12} /></ToolBtn>
-              <ToolBtn title="Strikethrough" onClick={() => cmd(toggleStrikethroughCommand.key)}><Strikethrough size={12} /></ToolBtn>
-              <ToolBtn title="Inline code" onClick={() => cmd(toggleInlineCodeCommand.key)}><Code size={12} /></ToolBtn>
+              <ToolBtn title="Bold (Ctrl+B)" onClick={cmdBold}><Bold size={12} /></ToolBtn>
+              <ToolBtn title="Italic (Ctrl+I)" onClick={cmdItalic}><Italic size={12} /></ToolBtn>
+              <ToolBtn title="Underline" onClick={cmdUnderline}><Underline size={12} /></ToolBtn>
+              <ToolBtn title="Strikethrough" onClick={cmdStrike}><Strikethrough size={12} /></ToolBtn>
+              <ToolBtn title="Inline code" onClick={cmdInlineCode}><Code size={12} /></ToolBtn>
               {/* Font color picker */}
               <button
                 ref={colorBtnRef}
@@ -932,7 +1143,26 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       )}
 
       {/* Editor + wikilink dropdown */}
-      <div ref={editorContainerRef} className="flex-grow min-w-0 overflow-auto custom-scrollbar relative">
+      <div
+        ref={editorContainerRef}
+        className="flex-grow min-w-0 overflow-auto custom-scrollbar relative"
+        onContextMenu={(e) => {
+          // Right-click opens the formatting ctx menu at cursor.
+          // We don't open on right-click of images, links, or the wikilink
+          // dropdown so the native browser menu still works there when useful.
+          const target = e.target as HTMLElement;
+          if (target.closest('img, a, .jn-wikilink-dropdown')) return;
+          e.preventDefault();
+          // Clamp to viewport so the menu doesn't render off-screen
+          const MENU_APPROX_W = 380;
+          const MENU_APPROX_H = 40;
+          const x = Math.min(e.clientX, window.innerWidth - MENU_APPROX_W - 8);
+          const y = Math.min(e.clientY, window.innerHeight - MENU_APPROX_H - 8);
+          setCtxMenu({ x: Math.max(8, x), y: Math.max(8, y) });
+          setCtxColorPos(null);
+          setCtxHighlightPos(null);
+        }}
+      >
         {suggestions.active && suggestions.suggestions.length > 0 && (() => {
           // Position the dropdown just below the current cursor.
           // suggestions.coords is in viewport coords; subtract the container's
@@ -1014,6 +1244,201 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                 className="jn-color-swatch"
                 style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
                 onMouseDown={e => { e.preventDefault(); cmdHighlight(color); }}
+              >
+                {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Right-click contextual formatting menu.
+          Buttons use onMouseDown with preventDefault+stopPropagation so:
+            (1) the editor's selection isn't lost to focus changes
+            (2) the menu's own outside-click handler doesn't dismiss it
+                before the action runs. */}
+      {ctxMenu && (() => {
+        const stop = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); };
+        const runAndClose = (fn: () => void) => (e: React.MouseEvent) => {
+          stop(e);
+          fn();
+          setCtxMenu(null);
+        };
+        return (
+          <div
+            ref={ctxMenuRef}
+            className="jn-ctx-menu"
+            style={{ top: ctxMenu.y, left: ctxMenu.x }}
+            onMouseDown={stop}
+          >
+            <button className="jn-ctx-btn" title="Bold (Ctrl+B)" onMouseDown={runAndClose(cmdBold)}>
+              <Bold size={13} />
+            </button>
+            <button className="jn-ctx-btn" title="Italic (Ctrl+I)" onMouseDown={runAndClose(cmdItalic)}>
+              <Italic size={13} />
+            </button>
+            <button className="jn-ctx-btn" title="Underline" onMouseDown={runAndClose(cmdUnderline)}>
+              <Underline size={13} />
+            </button>
+
+            <span className="jn-ctx-divider" />
+
+            <button className="jn-ctx-btn" title="Align left" onMouseDown={runAndClose(() => cmdAlign('left'))}>
+              <AlignLeft size={13} />
+            </button>
+            <button className="jn-ctx-btn" title="Align center" onMouseDown={runAndClose(() => cmdAlign('center'))}>
+              <AlignCenter size={13} />
+            </button>
+            <button className="jn-ctx-btn" title="Align right" onMouseDown={runAndClose(() => cmdAlign('right'))}>
+              <AlignRight size={13} />
+            </button>
+
+            <span className="jn-ctx-divider" />
+
+            <button className="jn-ctx-btn" title="Decrease indent" onMouseDown={runAndClose(cmdOutdent)}>
+              <Outdent size={13} />
+            </button>
+            <button className="jn-ctx-btn" title="Increase indent" onMouseDown={runAndClose(cmdIndent)}>
+              <Indent size={13} />
+            </button>
+
+            <span className="jn-ctx-divider" />
+
+            {/* Font color split-button — main applies last-used, chevron opens palette */}
+            <span className="jn-ctx-split">
+              <button
+                className="jn-ctx-btn"
+                title="Apply last font color"
+                onMouseDown={e => {
+                  stop(e);
+                  // Save selection for cmdColor to restore
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                  cmdColor(lastFontColorRef.current);
+                  setCtxMenu(null);
+                }}
+              >
+                <Palette size={13} />
+                <span className="jn-ctx-color-bar" style={{ background: lastFontColorRef.current }} />
+              </button>
+              <button
+                className="jn-ctx-split-arrow"
+                title="Choose font color"
+                onMouseDown={e => {
+                  stop(e);
+                  // Save selection before opening palette
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                  const btn = e.currentTarget as HTMLElement;
+                  const rect = btn.getBoundingClientRect();
+                  setCtxColorPos({ top: rect.bottom + 4, left: rect.left });
+                  setCtxHighlightPos(null);
+                }}
+              >
+                <ChevronDown size={10} />
+              </button>
+            </span>
+
+            {/* Highlight split-button */}
+            <span className="jn-ctx-split">
+              <button
+                className="jn-ctx-btn"
+                title="Apply last highlight"
+                onMouseDown={e => {
+                  stop(e);
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                  cmdHighlight(lastHighlightRef.current);
+                  setCtxMenu(null);
+                }}
+              >
+                <Highlighter size={13} />
+                <span className="jn-ctx-color-bar" style={{ background: lastHighlightRef.current }} />
+              </button>
+              <button
+                className="jn-ctx-split-arrow"
+                title="Choose highlight"
+                onMouseDown={e => {
+                  stop(e);
+                  const view = getView();
+                  if (view) {
+                    const { from, to } = view.state.selection;
+                    savedSelectionRef.current = { from, to };
+                  }
+                  const btn = e.currentTarget as HTMLElement;
+                  const rect = btn.getBoundingClientRect();
+                  setCtxHighlightPos({ top: rect.bottom + 4, left: rect.left });
+                  setCtxColorPos(null);
+                }}
+              >
+                <ChevronDown size={10} />
+              </button>
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* Ctx menu font-color palette */}
+      {ctxColorPos && (
+        <div
+          ref={ctxColorPaletteRef}
+          className="jn-ctx-palette"
+          style={{ top: ctxColorPos.top, left: ctxColorPos.left }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div className="jn-color-picker-label">Font Color</div>
+          <div className="jn-color-picker-grid">
+            {FONT_COLORS.map(({ label, color }) => (
+              <button
+                key={label}
+                title={label}
+                className="jn-color-swatch"
+                style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                onMouseDown={e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cmdColor(color);
+                  setCtxMenu(null);
+                }}
+              >
+                {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ctx menu highlight palette */}
+      {ctxHighlightPos && (
+        <div
+          ref={ctxHighlightPaletteRef}
+          className="jn-ctx-palette"
+          style={{ top: ctxHighlightPos.top, left: ctxHighlightPos.left }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div className="jn-color-picker-label">Highlight</div>
+          <div className="jn-color-picker-grid">
+            {HIGHLIGHT_COLORS.map(({ label, color }) => (
+              <button
+                key={label}
+                title={label}
+                className="jn-color-swatch"
+                style={{ background: color ?? 'transparent', border: color ? 'none' : '1px dashed var(--border-color)' }}
+                onMouseDown={e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cmdHighlight(color);
+                  setCtxMenu(null);
+                }}
               >
                 {!color && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>✕</span>}
               </button>

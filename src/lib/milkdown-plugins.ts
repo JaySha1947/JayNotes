@@ -666,6 +666,49 @@ function applyToEachItem(
   return false;
 }
 
+/** Indent the current list item(s). If not in a list, no-op and returns false. */
+export function execIndent(view: any): boolean {
+  if (!view) return false;
+  const { state, dispatch } = view;
+  const listItemType = state.schema.nodes.list_item;
+  if (!listItemType) return false;
+  const { $from } = state.selection;
+  let inList = false;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type === listItemType) { inList = true; break; }
+  }
+  if (!inList) return false;
+  view.focus();
+  return sinkMultipleListItems(state, dispatch, listItemType);
+}
+
+/** Outdent the current list item(s). If not in a list, no-op and returns false. */
+export function execOutdent(view: any): boolean {
+  if (!view) return false;
+  const { state, dispatch } = view;
+  const listItemType = state.schema.nodes.list_item;
+  if (!listItemType) return false;
+  const { $from } = state.selection;
+  let inList = false;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type === listItemType) { inList = true; break; }
+  }
+  if (!inList) return false;
+  view.focus();
+  return liftCurrentItemOnly(state, dispatch, listItemType);
+}
+
+/** Is the cursor inside a list? */
+export function isInList(state: any): boolean {
+  const listItemType = state.schema.nodes.list_item;
+  if (!listItemType) return false;
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type === listItemType) return true;
+  }
+  return false;
+}
+
 function sinkMultipleListItems(state: any, dispatch: any, listItemType: any): boolean {
   const worked = applyToEachItem(state, dispatch, listItemType, false, // bottom-up
     (s: any, d: any) => sinkListItem(listItemType)(s, d) ?? false
@@ -839,6 +882,55 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
     },
   },
 }));
+
+// ─── Underline mark ──────────────────────────────────────────────────────────
+// Underline is not part of CommonMark or GFM, so like jn_color/jn_highlight
+// we serialize to an HTML <u> tag (round-trips cleanly through remark's html
+// node passthrough).
+
+export const underlineMark = $markSchema('jn_underline', () => ({
+  inclusive: false,
+  parseDOM: [{ tag: 'u' }, { tag: 'span[data-jn-underline]' }],
+  toDOM: () => ['u', { 'data-jn-underline': '1' }, 0],
+  parseMarkdown: {
+    match: (node: any) =>
+      node.type === 'html' &&
+      (/^<u[\s>]/i.test(node.value ?? '') || /data-jn-underline/.test(node.value ?? '')),
+    runner: (state: any, node: any, markType: any) => {
+      const textMatch = (node.value ?? '').match(/>([^<]*)<\/(?:u|span)>/i);
+      const text = textMatch ? textMatch[1] : '';
+      if (text) {
+        state.openMark(markType);
+        state.addNode('text', undefined, text);
+        state.closeMark(markType);
+      }
+    },
+  },
+  toMarkdown: {
+    match: (mark: any) => mark.type.name === 'jn_underline',
+    runner: (state: any, mark: any) => {
+      state.withMark(mark, 'html', undefined, { value: '<u>' });
+    },
+  },
+}));
+
+/** Toggle underline on current selection. */
+export function toggleUnderline(view: any): boolean {
+  if (!view) return false;
+  const { state, dispatch } = view;
+  const markType = state.schema.marks['jn_underline'];
+  if (!markType) return false;
+  const { from, to, empty } = state.selection;
+  if (empty) return false;
+  // If any part of the selection already has the mark, remove it; else add it.
+  const has = state.doc.rangeHasMark(from, to, markType);
+  const tr = has
+    ? state.tr.removeMark(from, to, markType)
+    : state.tr.addMark(from, to, markType.create());
+  dispatch(tr);
+  view.focus();
+  return true;
+}
 
 /**
  * Apply or remove a font color on the current selection.
@@ -1036,6 +1128,156 @@ export function restoreTableThemes(view: any, entries: Array<{ index: number; th
     const pos = tables[index];
     if (pos !== undefined && theme) {
       tr = tr.setMeta(TABLE_THEME_META, { pos, theme });
+      any = true;
+    }
+  }
+  if (any) view.dispatch(tr);
+}
+
+// ─── Block alignment plugin ──────────────────────────────────────────────────
+//
+// Text alignment (left/center/right) isn't part of CommonMark, so we avoid
+// touching the markdown schema and instead track alignment in ProseMirror
+// plugin state keyed by each textblock's position. Rendered via
+// Decoration.node which applies `.jn-align-{left,center,right}` to the block.
+// This mirrors the table-theme plugin approach — decorations survive every
+// transaction cleanly and remap through doc changes.
+//
+// Persistence: a sidecar JSON blob in localStorage keyed by filePath. Not
+// stored in the markdown itself (would pollute round-trips with HTML noise).
+
+export const ALIGN_META = 'jn-set-align';
+export const alignPluginKey = new PluginKey('jn-align');
+export type AlignValue = 'left' | 'center' | 'right' | '';
+
+interface AlignState {
+  aligns: Map<number, AlignValue>;
+}
+
+export const alignPlugin = $prose(() => {
+  return new Plugin<AlignState>({
+    key: alignPluginKey,
+    state: {
+      init: (): AlignState => ({ aligns: new Map() }),
+      apply(tr, prev): AlignState {
+        let aligns = prev.aligns;
+
+        const meta = tr.getMeta(ALIGN_META);
+        if (meta) {
+          aligns = new Map(prev.aligns);
+          if (!meta.align || meta.align === 'left') {
+            // 'left' is the default — no need to store it
+            aligns.delete(meta.pos);
+          } else {
+            aligns.set(meta.pos, meta.align);
+          }
+        }
+
+        if (tr.docChanged) {
+          const remapped = new Map<number, AlignValue>();
+          aligns.forEach((v, pos) => {
+            const mapped = tr.mapping.mapResult(pos);
+            if (!mapped.deleted) remapped.set(mapped.pos, v);
+          });
+          aligns = remapped;
+        }
+
+        return { aligns };
+      },
+    },
+    props: {
+      decorations(state) {
+        const p = alignPluginKey.getState(state) as AlignState | undefined;
+        if (!p || p.aligns.size === 0) return DecorationSet.empty;
+        const decos: Decoration[] = [];
+        p.aligns.forEach((v, pos) => {
+          try {
+            const node = state.doc.nodeAt(pos);
+            if (node && node.isTextblock) {
+              decos.push(
+                Decoration.node(pos, pos + node.nodeSize, { class: `jn-align-${v}` })
+              );
+            }
+          } catch (_) { /* invalid pos, skip */ }
+        });
+        return DecorationSet.create(state.doc, decos);
+      },
+    },
+  });
+});
+
+/** Returns the start position of the innermost textblock containing the selection. */
+function findBlockPos(state: any): number {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d >= 0; d--) {
+    const node = $from.node(d);
+    if (node.isTextblock) return $from.before(d);
+  }
+  return -1;
+}
+
+/** Apply alignment to the block(s) overlapping the selection. Empty string = reset to left. */
+export function applyAlign(view: any, align: AlignValue): boolean {
+  if (!view) return false;
+  const { state } = view;
+  const { from, to } = state.selection;
+
+  // Collect every textblock overlapping the selection
+  const positions: number[] = [];
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    if (node.isTextblock) positions.push(pos);
+  });
+  // Fallback for a collapsed cursor in the middle of a block
+  if (positions.length === 0) {
+    const pos = findBlockPos(state);
+    if (pos >= 0) positions.push(pos);
+  }
+  if (positions.length === 0) return false;
+
+  let tr = state.tr;
+  for (const pos of positions) tr = tr.setMeta(ALIGN_META, { pos, align });
+  view.dispatch(tr);
+  view.focus();
+  return true;
+}
+
+/** Get current alignment for the block containing the selection. */
+export function getCurrentAlign(state: any): AlignValue {
+  const pos = findBlockPos(state);
+  if (pos < 0) return '';
+  const p = alignPluginKey.getState(state) as AlignState | undefined;
+  return p?.aligns.get(pos) ?? '';
+}
+
+/** Serialize alignment state for persistence as [{index, align}] (index = n-th textblock). */
+export function serializeAlignments(state: any): Array<{ index: number; align: AlignValue }> {
+  const p = alignPluginKey.getState(state) as AlignState | undefined;
+  if (!p || p.aligns.size === 0) return [];
+  const blocks: number[] = [];
+  state.doc.descendants((node: any, pos: number) => {
+    if (node.isTextblock) blocks.push(pos);
+  });
+  const result: Array<{ index: number; align: AlignValue }> = [];
+  p.aligns.forEach((align, pos) => {
+    const idx = blocks.indexOf(pos);
+    if (idx >= 0) result.push({ index: idx, align });
+  });
+  return result;
+}
+
+/** Restore alignment from serialized form. */
+export function restoreAlignments(view: any, entries: Array<{ index: number; align: AlignValue }>): void {
+  if (!view || entries.length === 0) return;
+  const blocks: number[] = [];
+  view.state.doc.descendants((node: any, pos: number) => {
+    if (node.isTextblock) blocks.push(pos);
+  });
+  let tr = view.state.tr;
+  let any = false;
+  for (const { index, align } of entries) {
+    const pos = blocks[index];
+    if (pos !== undefined && align) {
+      tr = tr.setMeta(ALIGN_META, { pos, align });
       any = true;
     }
   }
