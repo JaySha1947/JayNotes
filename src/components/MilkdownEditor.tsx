@@ -465,13 +465,29 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   }, []);
 
   // Auto-show/hide table toolbar when cursor moves into/out of a table.
-  // Polls on selectionchange (fired by ProseMirror on every cursor move).
+  // Also sync the active theme indicator when moving between tables.
   useEffect(() => {
     const check = () => {
       const view = getView();
       if (!view) return;
       const inTable = isInTable(view.state);
       setShowTableTools(prev => prev !== inTable ? inTable : prev);
+
+      // Sync active theme from data attribute on the current table wrapper
+      if (inTable) {
+        const { $from } = view.state.selection;
+        for (let d = $from.depth; d >= 0; d--) {
+          if ($from.node(d).type.name === 'table') {
+            const pos = $from.before(d);
+            const dom = view.nodeDOM(pos) as HTMLElement | null;
+            const wrapper = dom?.closest('.tableWrapper') as HTMLElement | null;
+            if (wrapper) {
+              setTableTheme(wrapper.getAttribute('data-jn-theme') ?? '');
+            }
+            break;
+          }
+        }
+      }
     };
     document.addEventListener('selectionchange', check);
     return () => document.removeEventListener('selectionchange', check);
@@ -565,15 +581,41 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     setShowHighlightPicker(false);
   }, [getView]);
 
-  // Apply table theme class to the nearest table wrapper
+  // Apply table theme class to the table wrapper the cursor is currently in.
+  // We locate the table DOM node by resolving the ProseMirror cursor position,
+  // then walking up the real DOM from the view's nodeDOM at that position.
   const cmdTableTheme = useCallback((theme: string) => {
     const view = getView();
     if (!view) return;
-    const wrapper = (view.dom as HTMLElement).querySelector('.tableWrapper');
+
+    // Find the table node position from the cursor
+    const { state } = view;
+    const { $from } = state.selection;
+    let tablePos: number | null = null;
+    for (let d = $from.depth; d >= 0; d--) {
+      if ($from.node(d).type.name === 'table') {
+        tablePos = $from.before(d);
+        break;
+      }
+    }
+    if (tablePos === null) return;
+
+    // Get the DOM node for that table position
+    const tableDom = view.nodeDOM(tablePos) as HTMLElement | null;
+    if (!tableDom) return;
+
+    // Walk up to the .tableWrapper (prosemirror-tables wraps every table in one)
+    const wrapper = tableDom.closest('.tableWrapper') as HTMLElement | null
+      ?? tableDom.parentElement?.closest('.tableWrapper') as HTMLElement | null;
     if (!wrapper) return;
-    // Remove all theme classes
-    TABLE_THEMES.forEach(t => wrapper.classList.remove(`jn-table--${t.id}`));
+
+    // Swap theme class
+    TABLE_THEMES.forEach(t => { if (t.id) wrapper.classList.remove(`jn-table--${t.id}`); });
     if (theme) wrapper.classList.add(`jn-table--${theme}`);
+
+    // Persist theme in a data attribute so re-renders can restore it
+    wrapper.setAttribute('data-jn-theme', theme);
+
     setTableTheme(theme);
   }, [getView]);
 
