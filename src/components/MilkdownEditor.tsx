@@ -585,9 +585,16 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     } catch (_) { /* ignore corrupt data */ }
 
     // ── Column-width observer ────────────────────────────────────────────
-    // Watch for changes to <col> style attributes (user dragging resize handle)
-    // and persist after a short debounce.
-    if (colWidthObserverRef.current) colWidthObserverRef.current.disconnect();
+    // Save column widths after the user finishes dragging a resize handle.
+    // We use mouseup on the document (the resize handle is inside the editor
+    // but the drag ends on document) rather than a MutationObserver, because
+    // a subtree style-observer fires on every spell-check decoration and
+    // causes excessive calls / potential crashes.
+    if (colWidthObserverRef.current) {
+      // Reuse the ref to store a cleanup fn via a small wrapper object trick —
+      // store the removeEventListener as a no-op observer disconnect substitute.
+      (colWidthObserverRef.current as any).disconnect?.();
+    }
     let colWidthTimer: ReturnType<typeof setTimeout> | null = null;
     const saveColWidths = () => {
       const currentPath = currentFileRef.current;
@@ -596,6 +603,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
         if (!editorDom) return;
         const tables = editorDom.querySelectorAll('table');
+        if (tables.length === 0) return;
         const tableWidths: Array<Array<number | null>> = [];
         tables.forEach(table => {
           const cols = table.querySelectorAll('colgroup col');
@@ -614,21 +622,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         }
       } catch (_) { /* quota — non-fatal */ }
     };
-    const observer = new MutationObserver(() => {
+    const onMouseUp = () => {
       if (colWidthTimer) clearTimeout(colWidthTimer);
-      colWidthTimer = setTimeout(saveColWidths, 600);
-    });
-    try {
-      const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
-      if (editorDom) {
-        observer.observe(editorDom, {
-          subtree: true,
-          attributeFilter: ['style'],
-          attributeOldValue: false,
-        });
-        colWidthObserverRef.current = observer;
-      }
-    } catch (_) { /* ignore */ }
+      colWidthTimer = setTimeout(saveColWidths, 300);
+    };
+    document.addEventListener('mouseup', onMouseUp);
+    // Store cleanup in the ref using a fake observer shape
+    colWidthObserverRef.current = { disconnect: () => document.removeEventListener('mouseup', onMouseUp) } as any;
   }, []);
 
   // Register onOpenFile callback in the ProseMirror plugin so dblclick works
@@ -641,26 +641,6 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   useEffect(() => {
     return () => { colWidthObserverRef.current?.disconnect(); };
   }, []);
-
-  // Track cursor line/col from ProseMirror selection events
-  useEffect(() => {
-    const updateCursor = () => {
-      try {
-        const view = getView();
-        if (!view) { setCursorPos(null); return; }
-        const { from } = view.state.selection;
-        const resolved = view.state.doc.resolve(from);
-        // Line = count newlines before this position in the full doc text
-        const textBefore = view.state.doc.textBetween(0, from, '\n', '\0');
-        const lines = textBefore.split('\n');
-        const line = lines.length;
-        const col = (lines[lines.length - 1]?.length ?? 0) + 1;
-        setCursorPos({ line, col });
-      } catch { setCursorPos(null); }
-    };
-    window.addEventListener('jn-selection-updated', updateCursor);
-    return () => window.removeEventListener('jn-selection-updated', updateCursor);
-  }, [getView]);
 
   // Font size
   useEffect(() => {
@@ -766,6 +746,24 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (!inst) return null;
     try { return inst.action((ctx: any) => ctx.get(editorViewCtx)); } catch { return null; }
   }, []);
+
+  // Track cursor line/col — must be after getView is defined
+  useEffect(() => {
+    const updateCursor = () => {
+      try {
+        const view = getView();
+        if (!view) { setCursorPos(null); return; }
+        const { from } = view.state.selection;
+        const textBefore = view.state.doc.textBetween(0, from, '\n', '\0');
+        const lines = textBefore.split('\n');
+        const line = lines.length;
+        const col = (lines[lines.length - 1]?.length ?? 0) + 1;
+        setCursorPos({ line, col });
+      } catch { setCursorPos(null); }
+    };
+    window.addEventListener('jn-selection-updated', updateCursor);
+    return () => window.removeEventListener('jn-selection-updated', updateCursor);
+  }, [getView]);
 
   // Auto-show/hide table toolbar when cursor moves into/out of a table.
   // Also sync the active theme indicator when moving between tables.
