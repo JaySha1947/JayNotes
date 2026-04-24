@@ -4,7 +4,7 @@
 
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
-import { $mark, $markSchema, $prose } from '@milkdown/utils';
+import { $mark, $markSchema, $prose, $remark } from '@milkdown/utils';
 import { wrapInList, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 
 // ─── Callback for opening a file (set by the React component) ────────────────
@@ -1027,7 +1027,182 @@ function liftMultipleListItems(state: any, dispatch: any, listItemType: any): bo
   return liftTopLevelListItem(state, dispatch, listItemType);
 }
 
-// ─── Font color & highlight marks ────────────────────────────────────────────
+// ─── Remark preprocessing for HTML-based marks ───────────────────────────────
+//
+// Problem: Milkdown ships a built-in `html` NODE schema that matches any
+// remark AST node with `type === 'html'` — and since the ProseMirror parser
+// iterates `{...nodes, ...marks}` with nodes first, the built-in html node
+// matcher always wins over our mark matchers. The result: when a file
+// contains a standalone `<span data-jn-highlight=...>` html token (whether
+// it's part of a proper three-token sequence or an orphan), the built-in
+// schema swallows it as an atom node and renders its text verbatim — which
+// is why you see the raw tag string on screen.
+//
+// Fix: preprocess the remark AST in a `$remark` plugin (runs BEFORE the
+// ProseMirror parser walks the tree). We rename the token's `type` from
+// 'html' to a custom type like 'jnHighlightOpen' / 'jnHighlightClose' etc.
+// Our mark schemas match those custom types, and the built-in html node
+// schema doesn't. Orphans (tokens whose counterpart is missing because the
+// file was saved by a previous buggy version of this code) are deleted
+// entirely so they don't render as garbage.
+//
+// This also simplifies our mark parseMarkdown: no need for module-level
+// open/close flags anymore — the AST guarantees matching pairs before the
+// parser sees them.
+
+const OPEN_RE_HIGHLIGHT = /^<span\b[^>]*\bdata-jn-highlight\s*=\s*"([^"]*)"[^>]*>$/i;
+const OPEN_RE_COLOR     = /^<span\b[^>]*\bdata-jn-color\s*=\s*"([^"]*)"[^>]*>$/i;
+const OPEN_RE_UNDERLINE = /^<u(?:\s[^>]*)?>$/i;
+const CLOSE_RE_SPAN     = /^<\/span>\s*$/i;
+const CLOSE_RE_U        = /^<\/u>\s*$/i;
+
+type MarkKind = 'highlight' | 'color' | 'underline';
+
+function classifyOpenTag(value: string): { kind: MarkKind; attrs: Record<string, string> } | null {
+  let m = value.match(OPEN_RE_HIGHLIGHT);
+  if (m) return { kind: 'highlight', attrs: { color: m[1] } };
+  m = value.match(OPEN_RE_COLOR);
+  if (m) return { kind: 'color', attrs: { color: m[1] } };
+  if (OPEN_RE_UNDERLINE.test(value)) return { kind: 'underline', attrs: {} };
+  return null;
+}
+
+function classifyCloseTag(value: string): MarkKind | null {
+  // A `</span>` could close either highlight or color; we disambiguate via
+  // the nearest unclosed opener collected during the walk.
+  if (CLOSE_RE_SPAN.test(value)) return 'highlight'; // placeholder, resolved in walk
+  if (CLOSE_RE_U.test(value)) return 'underline';
+  return null;
+}
+
+/**
+ * Walk the given parent node's children array, rewriting HTML-mark opener/
+ * closer pairs into custom-typed nodes and deleting orphans. Recurses into
+ * any child with its own `.children` array.
+ */
+function rewriteMarkTokens(parent: any): void {
+  if (!parent || !Array.isArray(parent.children)) return;
+
+  const children = parent.children;
+  // Phase 1: pair matching opens with their nearest close within THIS parent.
+  // We do this with a simple stack-based scan rather than naively assuming
+  // every `<span>` closes the most recent `<span>` — if a `<u>` opens between
+  // a `<span>` open and `</span>`, the stack still works correctly because
+  // we match by kind.
+  interface OpenMark {
+    index: number;
+    kind: MarkKind;
+    attrs: Record<string, string>;
+  }
+  const stack: OpenMark[] = [];
+  // pairs[i] = { openIndex, closeIndex, kind, attrs }
+  const pairs: Array<{ openIndex: number; closeIndex: number; kind: MarkKind; attrs: Record<string, string> }> = [];
+
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (!c || c.type !== 'html' || typeof c.value !== 'string') continue;
+    const val = c.value;
+
+    const open = classifyOpenTag(val);
+    if (open) {
+      stack.push({ index: i, kind: open.kind, attrs: open.attrs });
+      continue;
+    }
+
+    if (CLOSE_RE_U.test(val)) {
+      // Close the nearest open 'underline'
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (stack[s].kind === 'underline') {
+          pairs.push({ openIndex: stack[s].index, closeIndex: i, kind: 'underline', attrs: stack[s].attrs });
+          stack.splice(s, 1);
+          break;
+        }
+      }
+    } else if (CLOSE_RE_SPAN.test(val)) {
+      // Close the nearest open 'highlight' or 'color' (whichever is nearest)
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (stack[s].kind === 'highlight' || stack[s].kind === 'color') {
+          pairs.push({ openIndex: stack[s].index, closeIndex: i, kind: stack[s].kind, attrs: stack[s].attrs });
+          stack.splice(s, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  // Phase 2: collect indices of orphan opens (still in stack) and orphan
+  // closes. We'll delete them. First collect all indices that are paired or
+  // orphaned, so we can rewrite in one pass.
+  const pairOpenIndices = new Set(pairs.map(p => p.openIndex));
+  const pairCloseIndices = new Set(pairs.map(p => p.closeIndex));
+  const orphanOpenIndices = new Set(stack.map(s => s.index));
+  // Orphan closes: any html child whose value matches a close regex but
+  // whose index isn't in pairCloseIndices.
+  const orphanCloseIndices = new Set<number>();
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (!c || c.type !== 'html' || typeof c.value !== 'string') continue;
+    if (pairCloseIndices.has(i)) continue;
+    if (CLOSE_RE_U.test(c.value) || CLOSE_RE_SPAN.test(c.value)) {
+      orphanCloseIndices.add(i);
+    }
+  }
+
+  // Phase 3: rewrite children array.
+  // - Paired open/close nodes keep their positions but get a custom type
+  //   that our mark schema matches and the built-in html node does not.
+  // - Orphans are removed.
+  // Build a pair lookup by openIndex.
+  const pairByOpen = new Map<number, { kind: MarkKind; attrs: Record<string, string> }>();
+  for (const p of pairs) pairByOpen.set(p.openIndex, { kind: p.kind, attrs: p.attrs });
+  const pairByClose = new Map<number, MarkKind>();
+  for (const p of pairs) pairByClose.set(p.closeIndex, p.kind);
+
+  const rewritten: any[] = [];
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (!c) continue;
+    if (orphanOpenIndices.has(i) || orphanCloseIndices.has(i)) {
+      // Drop orphans entirely — this heals files written by the previous
+      // buggy toMarkdown runner that emitted unmatched tags.
+      continue;
+    }
+    if (pairByOpen.has(i)) {
+      const { kind, attrs } = pairByOpen.get(i)!;
+      rewritten.push({ ...c, type: `jn${capitalize(kind)}Open`, data: { jnKind: kind, jnAttrs: attrs } });
+      continue;
+    }
+    if (pairByClose.has(i)) {
+      const kind = pairByClose.get(i)!;
+      rewritten.push({ ...c, type: `jn${capitalize(kind)}Close` });
+      continue;
+    }
+    rewritten.push(c);
+  }
+  parent.children = rewritten;
+
+  // Recurse
+  for (const c of rewritten) {
+    if (c && Array.isArray(c.children)) rewriteMarkTokens(c);
+  }
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Remark plugin that rewrites our HTML-mark tokens before the ProseMirror
+ * parser walks the AST. See comments above for the "why".
+ */
+export const jnHtmlMarksRemarkPlugin = $remark(
+  'remark-jn-html-marks',
+  () => () => (tree: any) => {
+    rewriteMarkTokens(tree);
+  },
+);
+
+// ─── Font color, highlight & underline marks ─────────────────────────────────
 //
 // These are Milkdown `$markSchema` plugins that inject three HTML marks:
 //   jn_color     — renders as <span data-jn-color="..." style="color: ...">
@@ -1035,33 +1210,18 @@ function liftMultipleListItems(state: any, dispatch: any, listItemType: any): bo
 //   jn_underline — renders as <u>
 //
 // Markdown round-trip:
-//   Saving (toMarkdown): emits a complete self-contained <span>text</span>
-//     as a single 'html' AST node. addNode returns truthy so the serializer
-//     skips the separate text-child emission, avoiding duplication.
+//   Saving (toMarkdown): emits a complete self-contained <span>text</span> (or
+//     <u>text</u>) as a single 'html' AST node. addNode returns truthy so the
+//     serializer skips the separate text-child emission, avoiding duplication.
 //
-//   Loading (parseMarkdown): remark splits inline HTML into THREE siblings —
-//     the opening tag node, the plain text node, the closing tag node. We
-//     handle this symmetrically: the opening-tag runner calls openMark and
-//     flips a module-level flag; the plain text node in between is rendered
-//     normally by the parser but inherits marks from state.#marks (so it
-//     gets our mark applied); the closing-tag runner calls closeMark.
-//
-//   The flags are module-level because each parse pass runs single-threaded
-//   and we need the closing-tag matcher to know whether a matching opening
-//   tag was seen earlier in the same document. The flags self-reset at the
-//   end of each paragraph via the symmetric close; any unbalanced HTML in
-//   user content would leave a flag set, which we defensively reset at the
-//   start of each file load (see resetHtmlMarkParseState).
-let _jnColorOpen = false;
-let _jnHighlightOpen = false;
-let _jnUnderlineOpen = false;
-
-/** Call before loading a new file to clear any leftover open-tag state from prior parses. */
-export function resetHtmlMarkParseState(): void {
-  _jnColorOpen = false;
-  _jnHighlightOpen = false;
-  _jnUnderlineOpen = false;
-}
+//   Loading (parseMarkdown): the remark preprocessor plugin
+//     jnHtmlMarksRemarkPlugin above walks the AST and rewrites matched
+//     opening/closing tag pairs into custom types (jnColorOpen, jnColorClose,
+//     etc.) while deleting orphans entirely. Our parseMarkdown match+runner
+//     here targets those custom types — NOT type === 'html' — so we no longer
+//     collide with the built-in 'html' node schema. Orphans having been
+//     stripped by the preprocessor also means broken files from previous
+//     buggy serializer versions heal on first load.
 
 export const fontColorMark = $markSchema('jn_color', () => ({
   attrs: { color: { default: '#000000' } },
@@ -1081,27 +1241,19 @@ export const fontColorMark = $markSchema('jn_color', () => ({
     0,
   ],
   parseMarkdown: {
-    // Remark splits inline HTML across 3 siblings (open tag, text, close tag).
-    // Match both the opening <span data-jn-color=...> and the paired </span>;
-    // open and close the mark symmetrically so the plain text in between
-    // inherits the mark via the parser's state.#marks.
-    match: (node: any) =>
-      node.type === 'html' &&
-      (/^<span[^>]*\bdata-jn-color=/i.test(node.value ?? '')
-        || (/^<\/span>\s*$/i.test(node.value ?? '') && _jnColorOpen)),
+    // The remark preprocessor (jnHtmlMarksRemarkPlugin) rewrites matched
+    // <span data-jn-color=...>/</span> pairs into custom AST types
+    // jnColorOpen / jnColorClose. Orphans have already been deleted.
+    // This means we no longer collide with the built-in 'html' node schema,
+    // and no module-level flags are needed because pairing is guaranteed.
+    match: (node: any) => node.type === 'jnColorOpen' || node.type === 'jnColorClose',
     runner: (state: any, node: any, markType: any) => {
-      const val = node.value ?? '';
-      if (/^<\/span>\s*$/i.test(val)) {
-        if (_jnColorOpen) {
-          state.closeMark(markType);
-          _jnColorOpen = false;
-        }
+      if (node.type === 'jnColorClose') {
+        state.closeMark(markType);
         return;
       }
-      const colorMatch = val.match(/data-jn-color="([^"]+)"/);
-      const color = colorMatch ? colorMatch[1] : '#000000';
+      const color = (node.data && node.data.jnAttrs && node.data.jnAttrs.color) || '#000000';
       state.openMark(markType, { color });
-      _jnColorOpen = true;
     },
   },
   toMarkdown: {
@@ -1136,32 +1288,16 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
     0,
   ],
   parseMarkdown: {
-    // Remark parses inline HTML as THREE separate siblings: opening <span>,
-    // text, closing </span>. The match+runner are called once per node.
-    // We match on both the opening tag (to open the mark) AND the closing
-    // </span> (to close it). The text in between is parsed by remark's own
-    // text handler, which picks up the currently-open marks from state.#marks.
-    // This is the symmetric pattern the parser state was designed for.
-    match: (node: any) =>
-      node.type === 'html' &&
-      (/^<span[^>]*\bdata-jn-highlight=/i.test(node.value ?? '')
-        || (/^<\/span>\s*$/i.test(node.value ?? '') && _jnHighlightOpen)),
+    // The remark preprocessor rewrites matched pairs into jnHighlightOpen /
+    // jnHighlightClose. Orphans are already deleted. See jnHtmlMarksRemarkPlugin.
+    match: (node: any) => node.type === 'jnHighlightOpen' || node.type === 'jnHighlightClose',
     runner: (state: any, node: any, markType: any) => {
-      const val = node.value ?? '';
-      if (/^<\/span>\s*$/i.test(val)) {
-        // Closing tag — close the mark if we have one open
-        if (_jnHighlightOpen) {
-          state.closeMark(markType);
-          _jnHighlightOpen = false;
-        }
+      if (node.type === 'jnHighlightClose') {
+        state.closeMark(markType);
         return;
       }
-      // Opening tag — extract the color and open the mark. The next
-      // sibling text node will be created with this mark applied.
-      const colorMatch = val.match(/data-jn-highlight="([^"]+)"/);
-      const color = colorMatch ? colorMatch[1] : '#ffeb3b';
+      const color = (node.data && node.data.jnAttrs && node.data.jnAttrs.color) || '#ffeb3b';
       state.openMark(markType, { color });
-      _jnHighlightOpen = true;
     },
   },
   toMarkdown: {
@@ -1184,24 +1320,15 @@ export const underlineMark = $markSchema('jn_underline', () => ({
   parseDOM: [{ tag: 'u' }, { tag: 'span[data-jn-underline]' }],
   toDOM: () => ['u', { 'data-jn-underline': '1' }, 0],
   parseMarkdown: {
-    // Remark splits inline HTML across 3 siblings: <u>, text, </u>.
-    // Match the opening AND the matching closing tag; open/close the mark
-    // symmetrically so the text between inherits it.
-    match: (node: any) =>
-      node.type === 'html' &&
-      (/^<u(\s|>)/i.test(node.value ?? '')
-        || (/^<\/u>\s*$/i.test(node.value ?? '') && _jnUnderlineOpen)),
+    // The remark preprocessor rewrites matched pairs into jnUnderlineOpen /
+    // jnUnderlineClose. Orphans are already deleted. See jnHtmlMarksRemarkPlugin.
+    match: (node: any) => node.type === 'jnUnderlineOpen' || node.type === 'jnUnderlineClose',
     runner: (state: any, node: any, markType: any) => {
-      const val = node.value ?? '';
-      if (/^<\/u>\s*$/i.test(val)) {
-        if (_jnUnderlineOpen) {
-          state.closeMark(markType);
-          _jnUnderlineOpen = false;
-        }
+      if (node.type === 'jnUnderlineClose') {
+        state.closeMark(markType);
         return;
       }
       state.openMark(markType);
-      _jnUnderlineOpen = true;
     },
   },
   toMarkdown: {
