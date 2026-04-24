@@ -894,3 +894,150 @@ export function applyHighlight(view: any, color: string | null): boolean {
   view.focus();
   return true;
 }
+
+// ─── Table theme plugin ──────────────────────────────────────────────────────
+//
+// Applies theme classes to each table's `.tableWrapper` via ProseMirror
+// decorations. Using decorations means the class survives every transaction —
+// unlike the previous approach (direct classList manipulation) which was wiped
+// by ProseMirror's NodeView re-render cycle.
+//
+// Plugin state is a Map<tablePos, themeId> keyed by the table node's start pos.
+// Positions are auto-remapped through doc changes via tr.mapping.
+
+export const TABLE_THEME_META = 'jn-set-table-theme';
+export const tableThemePluginKey = new PluginKey('jn-table-theme');
+
+interface TableThemeState {
+  themes: Map<number, string>;
+}
+
+export const tableThemePlugin = $prose(() => {
+  return new Plugin<TableThemeState>({
+    key: tableThemePluginKey,
+    state: {
+      init: (): TableThemeState => ({ themes: new Map() }),
+      apply(tr, prev): TableThemeState {
+        let themes = prev.themes;
+
+        const meta = tr.getMeta(TABLE_THEME_META);
+        if (meta) {
+          themes = new Map(prev.themes);
+          if (meta.theme === '' || meta.theme == null) {
+            themes.delete(meta.pos);
+          } else {
+            themes.set(meta.pos, meta.theme);
+          }
+        }
+
+        if (tr.docChanged) {
+          const remapped = new Map<number, string>();
+          themes.forEach((theme, pos) => {
+            const mapped = tr.mapping.mapResult(pos);
+            if (!mapped.deleted) remapped.set(mapped.pos, theme);
+          });
+          themes = remapped;
+        }
+
+        return { themes };
+      },
+    },
+    props: {
+      decorations(state) {
+        const pluginState = tableThemePluginKey.getState(state) as TableThemeState | undefined;
+        if (!pluginState || pluginState.themes.size === 0) return DecorationSet.empty;
+
+        const decos: Decoration[] = [];
+        pluginState.themes.forEach((theme, pos) => {
+          try {
+            const node = state.doc.nodeAt(pos);
+            if (node && node.type.name === 'table') {
+              decos.push(
+                Decoration.node(pos, pos + node.nodeSize, {
+                  class: `jn-table--${theme}`,
+                  'data-jn-theme': theme,
+                })
+              );
+            }
+          } catch (_) { /* skip invalid positions */ }
+        });
+        return DecorationSet.create(state.doc, decos);
+      },
+    },
+  });
+});
+
+/** Find the start position of the table containing the selection. Returns -1 if none. */
+export function findTablePos(state: any): number {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d >= 0; d--) {
+    if ($from.node(d).type.name === 'table') {
+      return $from.before(d);
+    }
+  }
+  return -1;
+}
+
+/** Get the current theme id ('' = default) for the table containing the selection. */
+export function getCurrentTableTheme(state: any): string {
+  const pos = findTablePos(state);
+  if (pos < 0) return '';
+  const pluginState = tableThemePluginKey.getState(state) as TableThemeState | undefined;
+  return pluginState?.themes.get(pos) ?? '';
+}
+
+/** Apply a theme to the current table. theme='' removes any theme. */
+export function setTableThemeForCurrent(view: any, theme: string): boolean {
+  if (!view) return false;
+  const pos = findTablePos(view.state);
+  if (pos < 0) return false;
+  view.dispatch(view.state.tr.setMeta(TABLE_THEME_META, { pos, theme }));
+  return true;
+}
+
+/** Serialize theme state as [{tableIndex, theme}] pairs for persistence. */
+export function serializeTableThemes(state: any): Array<{ index: number; theme: string }> {
+  const pluginState = tableThemePluginKey.getState(state) as TableThemeState | undefined;
+  if (!pluginState || pluginState.themes.size === 0) return [];
+
+  const tables: number[] = [];
+  state.doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'table') {
+      tables.push(pos);
+      return false;
+    }
+    return true;
+  });
+
+  const result: Array<{ index: number; theme: string }> = [];
+  pluginState.themes.forEach((theme, pos) => {
+    const idx = tables.indexOf(pos);
+    if (idx >= 0) result.push({ index: idx, theme });
+  });
+  return result;
+}
+
+/** Restore themes from persistence. Maps [tableIndex, theme] back to current table positions. */
+export function restoreTableThemes(view: any, entries: Array<{ index: number; theme: string }>): void {
+  if (!view || entries.length === 0) return;
+
+  const tables: number[] = [];
+  view.state.doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'table') {
+      tables.push(pos);
+      return false;
+    }
+    return true;
+  });
+
+  let tr = view.state.tr;
+  let any = false;
+  for (const { index, theme } of entries) {
+    const pos = tables[index];
+    if (pos !== undefined && theme) {
+      tr = tr.setMeta(TABLE_THEME_META, { pos, theme });
+      any = true;
+    }
+  }
+  if (any) view.dispatch(tr);
+}

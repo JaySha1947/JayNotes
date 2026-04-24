@@ -40,6 +40,8 @@ import {
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
   fontColorMark, highlightMark, applyFontColor, applyHighlight,
+  tableThemePlugin, setTableThemeForCurrent, getCurrentTableTheme,
+  serializeTableThemes, restoreTableThemes,
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 
@@ -297,6 +299,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(columnResizingPlugin)
       .use(fontColorMark)
       .use(highlightMark)
+      .use(tableThemePlugin)
       .use(resizableImageView)
       .use(listTabPlugin)
       .use(tagDecoratorPlugin)
@@ -364,8 +367,48 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   currentFileRef.current = filePath;
   const sugRef = useRef(suggestions);
   sugRef.current = suggestions;
-  // Declared before early returns — fixes React error #300
-  const noopReady = useCallback(() => {}, []);
+  // Persist table themes to localStorage keyed by filePath. Populated by the
+  // editor-ready effect; called by cmdTableTheme after every theme change.
+  const persistThemesRef = useRef<(() => void) | null>(null);
+
+  // Invoked once per editor mount (per file load). Restores persisted table
+  // themes from localStorage and installs a persistence function that gets
+  // called every time a theme changes.
+  const handleEditorReady = useCallback(() => {
+    const inst = editorRef.current;
+    const path = currentFileRef.current;
+    if (!inst || !path) return;
+
+    let view: any;
+    try { view = inst.action((ctx: any) => ctx.get(editorViewCtx)); }
+    catch { return; }
+    if (!view) return;
+
+    // Restore themes from localStorage
+    try {
+      const raw = localStorage.getItem(`jn-themes:${path}`);
+      if (raw) {
+        const entries = JSON.parse(raw) as Array<{ index: number; theme: string }>;
+        if (Array.isArray(entries) && entries.length > 0) {
+          restoreTableThemes(view, entries);
+        }
+      }
+    } catch (_) { /* ignore corrupt entries */ }
+
+    // Install persistence function — closes over this specific view+path
+    persistThemesRef.current = () => {
+      const currentPath = currentFileRef.current;
+      if (!currentPath) return;
+      try {
+        const entries = serializeTableThemes(view.state);
+        if (entries.length === 0) {
+          localStorage.removeItem(`jn-themes:${currentPath}`);
+        } else {
+          localStorage.setItem(`jn-themes:${currentPath}`, JSON.stringify(entries));
+        }
+      } catch (_) { /* quota / parse errors are non-fatal */ }
+    };
+  }, []);
 
   // Register onOpenFile callback in the ProseMirror plugin so dblclick works
   useEffect(() => {
@@ -480,10 +523,14 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
   // Auto-show/hide table toolbar when cursor moves into/out of a table.
   // Also sync the active theme indicator when moving between tables.
-  // Uses Milkdown's `selectionUpdated` via a custom window event — this is
-  // triggered by every ProseMirror transaction (including single-click cursor
-  // placement), unlike native `selectionchange` which only fires on actual
-  // DOM selection changes.
+  //
+  // Triggers the check on:
+  //   - jn-selection-updated  (every ProseMirror transaction, including keyboard nav)
+  //   - selectionchange       (DOM-level changes)
+  //   - mouseup on the editor (catches single click cursor placement immediately)
+  //
+  // Reading theme from plugin state (not the DOM) means we always get the
+  // source of truth — DOM attrs can be stripped/re-rendered by ProseMirror.
   useEffect(() => {
     const check = () => {
       const view = getView();
@@ -492,20 +539,19 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       setShowTableTools(prev => prev !== inTable ? inTable : prev);
 
       if (inTable) {
+        // Theme lives in plugin state (authoritative)
+        const theme = getCurrentTableTheme(view.state);
+        setTableTheme(prev => (prev !== theme ? theme : prev));
+
+        // Also cache the DOM wrapper for any features that still need it
         const { $from } = view.state.selection;
-        // Walk up from the cursor's actual DOM node to find .tableWrapper.
-        // Using domAtPos is reliable regardless of NodeView internals — it gives
-        // us the real DOM node at the cursor position, from which we can walk up.
         try {
           const domInfo = view.domAtPos($from.pos);
           const cursorNode = domInfo.node instanceof Element
             ? domInfo.node
             : domInfo.node.parentElement;
-          const wrapper = cursorNode?.closest?.('.tableWrapper') as HTMLElement | null;
-          activeTableWrapperRef.current = wrapper ?? null;
-          if (wrapper) {
-            setTableTheme(wrapper.getAttribute('data-jn-theme') ?? '');
-          }
+          activeTableWrapperRef.current =
+            (cursorNode?.closest?.('.tableWrapper') as HTMLElement | null) ?? null;
         } catch (_) {
           activeTableWrapperRef.current = null;
         }
@@ -513,12 +559,21 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         activeTableWrapperRef.current = null;
       }
     };
+
+    // Listen to three complementary events so the table toolbar appears
+    // instantly on any kind of cursor placement into a table cell.
+    const onMouseUp = () => requestAnimationFrame(check);
     window.addEventListener('jn-selection-updated', check);
-    // Also keep native selectionchange as a backup for DOM selection edge cases
     document.addEventListener('selectionchange', check);
+    // mouseup on the editor container catches the exact moment a single click
+    // places the cursor inside a table cell (before blur/focus side-effects).
+    const container = editorContainerRef.current;
+    container?.addEventListener('mouseup', onMouseUp);
+
     return () => {
       window.removeEventListener('jn-selection-updated', check);
       document.removeEventListener('selectionchange', check);
+      container?.removeEventListener('mouseup', onMouseUp);
     };
   }, [getView]);
 
@@ -633,23 +688,21 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     setHighlightPickerPos(null);
   }, [getView]);
 
-  // Apply table theme class to the table wrapper the cursor is currently in.
-  // We locate the table DOM node by resolving the ProseMirror cursor position,
-  // then walking up the real DOM from the view's nodeDOM at that position.
-  // The wrapper is also stashed in a ref so onMouseDown can access it even
-  // after focus leaves the editor (which fires selectionchange first).
+  // Apply a theme to the table containing the cursor. Uses a ProseMirror
+  // decoration plugin (tableThemePlugin) to persist the class across ProseMirror
+  // re-renders — the previous direct DOM class mutation approach was wiped
+  // by the TableView NodeView on every transaction.
   const activeTableWrapperRef = useRef<HTMLElement | null>(null);
 
   const cmdTableTheme = useCallback((theme: string) => {
-    const wrapper = activeTableWrapperRef.current;
-    if (!wrapper) return;
-
-    // Swap theme class
-    TABLE_THEMES.forEach(t => { if (t.id) wrapper.classList.remove(`jn-table--${t.id}`); });
-    if (theme) wrapper.classList.add(`jn-table--${theme}`);
-    wrapper.setAttribute('data-jn-theme', theme);
+    const view = getView();
+    if (!view) return;
+    if (!view.hasFocus()) view.focus();
+    setTableThemeForCurrent(view, theme);
     setTableTheme(theme);
-  }, []);
+    // Persist the change
+    persistThemesRef.current?.();
+  }, [getView]);
 
   // Template
   const handleApplyTemplate = async (t: { name: string; path: string; type: string }) => {
@@ -915,7 +968,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               initialContent={content}
               editorRef={editorRef}
               onMarkdownChange={handleMarkdownChange}
-              onReady={noopReady}
+              onReady={handleEditorReady}
             />
           </MilkdownProvider>
         </div>
