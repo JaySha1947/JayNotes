@@ -1042,12 +1042,14 @@ export const fontColorMark = $markSchema('jn_color', () => ({
   },
   toMarkdown: {
     match: (mark: any) => mark.type.name === 'jn_color',
-    // Called by the serializer once per mark — just open the mark context.
-    // The serializer walks the node's text children and calls closeMark after.
-    runner: (state: any, mark: any) => {
-      state.withMark(mark, 'html', undefined, {
-        value: `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">`,
-      });
+    // Emit a complete self-contained HTML span. The third argument `node` is
+    // the ProseMirror text node being serialized, so node.text is the content.
+    // Using addNode (not withMark) so the span is emitted atomically and the
+    // serializer does not also emit the text child separately.
+    runner: (state: any, mark: any, node: any) => {
+      const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      state.addNode('html', undefined,
+        `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">${text}</span>`);
     },
   },
 }));
@@ -1086,10 +1088,10 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
   },
   toMarkdown: {
     match: (mark: any) => mark.type.name === 'jn_highlight',
-    runner: (state: any, mark: any) => {
-      state.withMark(mark, 'html', undefined, {
-        value: `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">`,
-      });
+    runner: (state: any, mark: any, node: any) => {
+      const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      state.addNode('html', undefined,
+        `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">${text}</span>`);
     },
   },
 }));
@@ -1119,8 +1121,9 @@ export const underlineMark = $markSchema('jn_underline', () => ({
   },
   toMarkdown: {
     match: (mark: any) => mark.type.name === 'jn_underline',
-    runner: (state: any, mark: any) => {
-      state.withMark(mark, 'html', undefined, { value: '<u>' });
+    runner: (state: any, _mark: any, node: any) => {
+      const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      state.addNode('html', undefined, `<u>${text}</u>`);
     },
   },
 }));

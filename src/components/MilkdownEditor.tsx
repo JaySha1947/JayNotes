@@ -857,12 +857,32 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const cmdIndent = useCallback(() => {
     const view = getView();
     if (!view) return;
+    // Restore selection saved at ctx-menu open time (right-click can collapse it)
+    const saved = savedSelectionRef.current;
+    if (saved && saved.from !== saved.to) {
+      try {
+        const tr = view.state.tr.setSelection(
+          TextSelection.create(view.state.doc, saved.from, saved.to)
+        );
+        view.dispatch(tr);
+      } catch (_) { /* ignore if positions became stale */ }
+    }
     if (execIndent(view)) recordAction({ type: 'indent' });
   }, [getView, recordAction]);
 
   const cmdOutdent = useCallback(() => {
     const view = getView();
     if (!view) return;
+    // Restore selection saved at ctx-menu open time (right-click can collapse it)
+    const saved = savedSelectionRef.current;
+    if (saved && saved.from !== saved.to) {
+      try {
+        const tr = view.state.tr.setSelection(
+          TextSelection.create(view.state.doc, saved.from, saved.to)
+        );
+        view.dispatch(tr);
+      } catch (_) { /* ignore if positions became stale */ }
+    }
     if (execOutdent(view)) recordAction({ type: 'outdent' });
   }, [getView, recordAction]);
 
@@ -1220,6 +1240,14 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           const target = e.target as HTMLElement;
           if (target.closest('img, a, .jn-wikilink-dropdown')) return;
           e.preventDefault();
+          // Capture the current ProseMirror selection BEFORE the contextmenu
+          // event can cause the browser to collapse it. All ctx menu actions
+          // (including indent/outdent) restore this saved range first.
+          const view = getView();
+          if (view) {
+            const { from, to } = view.state.selection;
+            savedSelectionRef.current = { from, to };
+          }
           // Clamp to viewport so the menu doesn't render off-screen
           const MENU_APPROX_W = 380;
           const MENU_APPROX_H = 40;
@@ -1368,8 +1396,6 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
             <button className="jn-ctx-btn" title="Increase indent" onMouseDown={runAndClose(cmdIndent)}>
               <Indent size={13} />
             </button>
-
-            <span className="jn-ctx-divider" />
 
             {/* Font color split-button — main applies last-used, chevron opens palette */}
             <span className="jn-ctx-split">
