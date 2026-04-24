@@ -1179,7 +1179,79 @@ function rewriteMarkTokens(parent: any): void {
     }
     rewritten.push(c);
   }
-  parent.children = rewritten;
+
+  // Phase 4: remove duplicate text copies that appear after a close tag.
+  // Caused by the missing `return state` in toMarkdown runners: the serializer
+  // treated the mark as unhandled and also emitted the text node separately,
+  // producing markdown like: <span>TEXT</span>TEXTTEXTTEXT. Each save+load
+  // cycle appended one more plain copy. We detect and strip them here.
+  //
+  // Strategy: for each jnXxxClose node, look at the text content between the
+  // matching open and close (there should be exactly one text sibling). Then
+  // remove any immediately-following text nodes whose value equals that content.
+  const closeTypes = new Set(['jnHighlightClose', 'jnColorClose', 'jnUnderlineClose']);
+  const openTypes  = new Set(['jnHighlightOpen', 'jnColorOpen', 'jnUnderlineOpen']);
+
+  const cleaned: any[] = [];
+  let skipDuplicateOf: string | null = null;
+
+  for (let i = 0; i < rewritten.length; i++) {
+    const c = rewritten[i];
+    if (!c) continue;
+
+    if (openTypes.has(c.type)) {
+      // Collect the text between this open and its matching close
+      // (everything until the next close of the same kind)
+      let innerText = '';
+      for (let j = i + 1; j < rewritten.length; j++) {
+        const nc = rewritten[j];
+        if (!nc) continue;
+        if (closeTypes.has(nc.type)) { break; }
+        if (nc.type === 'text') innerText += (nc.value ?? '');
+      }
+      skipDuplicateOf = innerText || null;
+      cleaned.push(c);
+      continue;
+    }
+
+    if (closeTypes.has(c.type)) {
+      cleaned.push(c);
+      // Strip duplicate text copies that appear after the close tag.
+      // These were caused by the missing `return state` in toMarkdown runners:
+      // the serializer emitted <span>TEXT</span>TEXT each save, accumulating
+      // over multiple refresh cycles. remark-parse may merge the copies into
+      // one long text node, so we strip all leading repetitions of `dup`.
+      if (skipDuplicateOf) {
+        const dup = skipDuplicateOf;
+        while (i + 1 < rewritten.length) {
+          const next = rewritten[i + 1];
+          if (!next || next.type !== 'text') break;
+          let val = next.value ?? '';
+          let stripped = false;
+          while (val.startsWith(dup)) {
+            val = val.slice(dup.length);
+            stripped = true;
+          }
+          if (stripped) {
+            if (val.length === 0) {
+              i++; // entire node was duplicates — drop it
+            } else {
+              next.value = val; // trim, keep remainder
+              break;
+            }
+          } else {
+            break; // no leading duplicate — stop
+          }
+        }
+      }
+      skipDuplicateOf = null;
+      continue;
+    }
+
+    cleaned.push(c);
+  }
+
+  parent.children = cleaned;
 
   // Recurse
   for (const c of rewritten) {
@@ -1266,6 +1338,7 @@ export const fontColorMark = $markSchema('jn_color', () => ({
       const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       state.addNode('html', undefined,
         `<span data-jn-color="${mark.attrs.color}" style="color:${mark.attrs.color}">${text}</span>`);
+      return state; // truthy: tells serializer this mark was handled, suppresses plain-text emission
     },
   },
 }));
@@ -1306,6 +1379,7 @@ export const highlightMark = $markSchema('jn_highlight', () => ({
       const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       state.addNode('html', undefined,
         `<span data-jn-highlight="${mark.attrs.color}" style="background-color:${mark.attrs.color};border-radius:2px;padding:0 1px">${text}</span>`);
+      return state;
     },
   },
 }));
@@ -1336,6 +1410,7 @@ export const underlineMark = $markSchema('jn_underline', () => ({
     runner: (state: any, _mark: any, node: any) => {
       const text = (node.text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       state.addNode('html', undefined, `<u>${text}</u>`);
+      return state;
     },
   },
 }));
