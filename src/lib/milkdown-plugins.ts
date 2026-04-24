@@ -1657,16 +1657,14 @@ export function restoreTableThemes(view: any, entries: Array<{ index: number; th
     return true;
   });
 
-  let tr = view.state.tr;
-  let any = false;
+  // setMeta only stores ONE value per key per transaction — dispatch a
+  // separate transaction for each table so none are overwritten.
   for (const { index, theme } of entries) {
     const pos = tables[index];
     if (pos !== undefined && theme) {
-      tr = tr.setMeta(TABLE_THEME_META, { pos, theme });
-      any = true;
+      view.dispatch(view.state.tr.setMeta(TABLE_THEME_META, { pos, theme }));
     }
   }
-  if (any) view.dispatch(tr);
 }
 
 // ─── Block alignment plugin ──────────────────────────────────────────────────

@@ -208,29 +208,49 @@ const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 const DEFAULT_FONT_SIZE = 15;
 
 const FONT_COLORS = [
-  { label: 'Default',   color: null },
-  { label: 'Red',       color: '#e53e3e' },
-  { label: 'Orange',    color: '#dd6b20' },
-  { label: 'Yellow',    color: '#d69e2e' },
-  { label: 'Green',     color: '#38a169' },
-  { label: 'Teal',      color: '#00c882' },
-  { label: 'Blue',      color: '#3182ce' },
-  { label: 'Purple',    color: '#805ad5' },
-  { label: 'Pink',      color: '#d53f8c' },
-  { label: 'Gray',      color: '#718096' },
-  { label: 'White',     color: '#f7fafc' },
+  { label: 'Default',      color: null },
+  { label: 'Red',          color: '#e53e3e' },
+  { label: 'Orange',       color: '#dd6b20' },
+  { label: 'Yellow',       color: '#d69e2e' },
+  { label: 'Green',        color: '#38a169' },
+  { label: 'Teal',         color: '#00c882' },
+  { label: 'Blue',         color: '#3182ce' },
+  { label: 'Purple',       color: '#805ad5' },
+  { label: 'Pink',         color: '#d53f8c' },
+  { label: 'Gray',         color: '#718096' },
+  { label: 'White',        color: '#f7fafc' },
+  { label: 'Soft Red',     color: '#fc8181' },
+  { label: 'Soft Orange',  color: '#f6ad55' },
+  { label: 'Soft Yellow',  color: '#f6e05e' },
+  { label: 'Soft Green',   color: '#68d391' },
+  { label: 'Soft Blue',    color: '#63b3ed' },
+  { label: 'Soft Purple',  color: '#b794f4' },
+  { label: 'Soft Pink',    color: '#f687b3' },
+  { label: 'Slate',        color: '#a0aec0' },
+  { label: 'Brown',        color: '#975a16' },
+  { label: 'Crimson',      color: '#c53030' },
+  { label: 'Navy',         color: '#2b6cb0' },
 ];
 
 const HIGHLIGHT_COLORS = [
-  { label: 'None',      color: null },
-  { label: 'Yellow',    color: 'rgba(253,230,138,0.85)' },
-  { label: 'Green',     color: 'rgba(187,247,208,0.85)' },
-  { label: 'Blue',      color: 'rgba(191,219,254,0.85)' },
-  { label: 'Pink',      color: 'rgba(251,207,232,0.85)' },
-  { label: 'Purple',    color: 'rgba(221,214,254,0.85)' },
-  { label: 'Orange',    color: 'rgba(254,215,170,0.85)' },
-  { label: 'Red',       color: 'rgba(254,202,202,0.85)' },
-  { label: 'Teal',      color: 'rgba(167,243,208,0.85)' },
+  { label: 'None',         color: null },
+  { label: 'Yellow',       color: 'rgba(253,230,138,0.85)' },
+  { label: 'Green',        color: 'rgba(187,247,208,0.85)' },
+  { label: 'Blue',         color: 'rgba(191,219,254,0.85)' },
+  { label: 'Pink',         color: 'rgba(251,207,232,0.85)' },
+  { label: 'Purple',       color: 'rgba(221,214,254,0.85)' },
+  { label: 'Orange',       color: 'rgba(254,215,170,0.85)' },
+  { label: 'Red',          color: 'rgba(254,202,202,0.85)' },
+  { label: 'Teal',         color: 'rgba(167,243,208,0.85)' },
+  { label: 'Lemon',        color: 'rgba(254,249,195,0.85)' },
+  { label: 'Lilac',        color: 'rgba(233,213,255,0.85)' },
+  { label: 'Blush',        color: 'rgba(255,228,230,0.85)' },
+  { label: 'Sky',          color: 'rgba(224,242,254,0.85)' },
+  { label: 'Mint',         color: 'rgba(209,250,229,0.85)' },
+  { label: 'Peach',        color: 'rgba(255,237,213,0.85)' },
+  { label: 'Lavender',     color: 'rgba(237,233,254,0.85)' },
+  { label: 'Cream',        color: 'rgba(254,252,191,0.85)' },
+  { label: 'Powder',       color: 'rgba(190,227,248,0.85)' },
 ];
 
 const TABLE_THEMES = [
@@ -242,6 +262,14 @@ const TABLE_THEMES = [
   { id: 'rose',      label: 'Rose',       preview: ['#fecdd3', '#fff1f2'] },
   { id: 'lemon',     label: 'Lemon',      preview: ['#fef08a', '#fefce8'] },
   { id: 'slate',     label: 'Slate',      preview: ['#cbd5e1', '#f8fafc'] },
+  { id: 'lilac',     label: 'Lilac',      preview: ['#e9d8fd', '#faf5ff'] },
+  { id: 'blush',     label: 'Blush',      preview: ['#fde8e8', '#fff5f5'] },
+  { id: 'sage',      label: 'Sage',       preview: ['#c6f6d5', '#f0fff4'] },
+  { id: 'cream',     label: 'Cream',      preview: ['#fefcbf', '#fffff0'] },
+  { id: 'powder',    label: 'Powder',     preview: ['#bee3f8', '#ebf8ff'] },
+  { id: 'sand',      label: 'Sand',       preview: ['#fde8c8', '#fffaf0'] },
+  { id: 'mist',      label: 'Mist',       preview: ['#e2e8f0', '#f7fafc'] },
+  { id: 'coral',     label: 'Coral',      preview: ['#feb2b2', '#fff5f5'] },
 ];
 
 // ─── Inner editor ─────────────────────────────────────────────────────────────
@@ -364,6 +392,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [tableTheme, setTableTheme] = useState<string>('');
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [cursorPos, setCursorPos] = useState<{ line: number; col: number } | null>(null);
   // Color picker dropdowns use position:fixed with coords to escape the
   // overflow-x-auto toolbar scroll container.
   const [colorPickerPos, setColorPickerPos] = useState<{ top: number; left: number } | null>(null);
@@ -464,6 +493,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const persistThemesRef = useRef<(() => void) | null>(null);
   // Same pattern for per-block alignment.
   const persistAlignRef = useRef<(() => void) | null>(null);
+  // Column-width persistence (MutationObserver + localStorage sidecar).
+  const colWidthObserverRef = useRef<MutationObserver | null>(null);
 
   // Invoked once per editor mount (per file load). Restores persisted table
   // themes and alignments from localStorage and installs persistence functions.
@@ -524,6 +555,80 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         }
       } catch (_) { /* non-fatal */ }
     };
+
+    // ── Column-width restore ─────────────────────────────────────────────
+    // Milkdown's columnResizingPlugin stores widths in <col style="width:Xpx">
+    // elements. We save them as a sidecar in localStorage and restore via DOM
+    // after the editor mounts, since GFM markdown has no column-width syntax.
+    try {
+      const savedWidths = localStorage.getItem(`jn-colwidths:${path}`);
+      if (savedWidths) {
+        const tableWidths = JSON.parse(savedWidths) as Array<Array<number | null>>;
+        // Defer to next frame so ProseMirror has rendered the colgroups
+        requestAnimationFrame(() => {
+          try {
+            const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
+            if (!editorDom) return;
+            const tables = editorDom.querySelectorAll('table');
+            tableWidths.forEach((widths, tIdx) => {
+              const table = tables[tIdx];
+              if (!table) return;
+              const cols = table.querySelectorAll('colgroup col');
+              widths.forEach((w, cIdx) => {
+                const col = cols[cIdx] as HTMLElement | undefined;
+                if (col && w != null) col.style.width = `${w}px`;
+              });
+            });
+          } catch (_) { /* ignore */ }
+        });
+      }
+    } catch (_) { /* ignore corrupt data */ }
+
+    // ── Column-width observer ────────────────────────────────────────────
+    // Watch for changes to <col> style attributes (user dragging resize handle)
+    // and persist after a short debounce.
+    if (colWidthObserverRef.current) colWidthObserverRef.current.disconnect();
+    let colWidthTimer: ReturnType<typeof setTimeout> | null = null;
+    const saveColWidths = () => {
+      const currentPath = currentFileRef.current;
+      if (!currentPath) return;
+      try {
+        const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
+        if (!editorDom) return;
+        const tables = editorDom.querySelectorAll('table');
+        const tableWidths: Array<Array<number | null>> = [];
+        tables.forEach(table => {
+          const cols = table.querySelectorAll('colgroup col');
+          const widths: Array<number | null> = [];
+          cols.forEach((col: Element) => {
+            const w = (col as HTMLElement).style.width;
+            widths.push(w ? parseFloat(w) : null);
+          });
+          tableWidths.push(widths);
+        });
+        const allNull = tableWidths.every(t => t.every(w => w == null));
+        if (allNull) {
+          localStorage.removeItem(`jn-colwidths:${currentPath}`);
+        } else {
+          localStorage.setItem(`jn-colwidths:${currentPath}`, JSON.stringify(tableWidths));
+        }
+      } catch (_) { /* quota — non-fatal */ }
+    };
+    const observer = new MutationObserver(() => {
+      if (colWidthTimer) clearTimeout(colWidthTimer);
+      colWidthTimer = setTimeout(saveColWidths, 600);
+    });
+    try {
+      const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
+      if (editorDom) {
+        observer.observe(editorDom, {
+          subtree: true,
+          attributeFilter: ['style'],
+          attributeOldValue: false,
+        });
+        colWidthObserverRef.current = observer;
+      }
+    } catch (_) { /* ignore */ }
   }, []);
 
   // Register onOpenFile callback in the ProseMirror plugin so dblclick works
@@ -531,6 +636,31 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (onOpenFile) setOpenFileCallback(onOpenFile);
     return () => setOpenFileCallback(() => {});
   }, [onOpenFile]);
+
+  // Disconnect column-width MutationObserver on unmount
+  useEffect(() => {
+    return () => { colWidthObserverRef.current?.disconnect(); };
+  }, []);
+
+  // Track cursor line/col from ProseMirror selection events
+  useEffect(() => {
+    const updateCursor = () => {
+      try {
+        const view = getView();
+        if (!view) { setCursorPos(null); return; }
+        const { from } = view.state.selection;
+        const resolved = view.state.doc.resolve(from);
+        // Line = count newlines before this position in the full doc text
+        const textBefore = view.state.doc.textBetween(0, from, '\n', '\0');
+        const lines = textBefore.split('\n');
+        const line = lines.length;
+        const col = (lines[lines.length - 1]?.length ?? 0) + 1;
+        setCursorPos({ line, col });
+      } catch { setCursorPos(null); }
+    };
+    window.addEventListener('jn-selection-updated', updateCursor);
+    return () => window.removeEventListener('jn-selection-updated', updateCursor);
+  }, [getView]);
 
   // Font size
   useEffect(() => {
@@ -1162,6 +1292,28 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                 title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}>
                 <Bookmark size={13} fill={isBookmarked ? 'currentColor' : 'none'} />
               </button>
+            )}
+            {/* Cursor position indicator */}
+            {cursorPos && (
+              <span
+                title="Cursor position (Line : Column)"
+                style={{
+                  fontSize: 10,
+                  color: 'var(--text-muted)',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 4,
+                  padding: '1px 6px',
+                  fontVariantNumeric: 'tabular-nums',
+                  letterSpacing: '0.02em',
+                  whiteSpace: 'nowrap',
+                  userSelect: 'none',
+                  minWidth: 60,
+                  textAlign: 'center',
+                }}
+              >
+                Ln {cursorPos.line} · Col {cursorPos.col}
+              </span>
             )}
           </div>
         </div>

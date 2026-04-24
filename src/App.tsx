@@ -3,7 +3,7 @@ import { Group, Panel as PanelOrig, Separator } from 'react-resizable-panels';
 const PanelGroup = Group as any;
 const Panel = PanelOrig as any;
 const PanelResizeHandle = Separator as any;
-import { Settings, Search, Network, FileText, Plus, X, Calendar, Clock, Bookmark, LayoutDashboard, HelpCircle, ArrowLeft, ArrowRight, LogOut, PanelRight, ChevronLeft, ChevronRight, ClipboardList, Layers, Edit3, Trash2, Copy, LayoutGrid, FolderTree, FilePlus2, SquarePlus, Users, User, ShieldAlert, Shield, Pencil, Check } from 'lucide-react';
+import { Settings, Search, Network, FileText, Plus, X, Calendar, Clock, Bookmark, LayoutDashboard, HelpCircle, ArrowLeft, ArrowRight, LogOut, DoorOpen, PanelRight, ChevronLeft, ChevronRight, ClipboardList, Layers, Edit3, Trash2, Copy, LayoutGrid, FolderTree, FilePlus2, SquarePlus, Users, User, ShieldAlert, Shield, Pencil, Check } from 'lucide-react';
 import { FileExplorer } from './components/FileExplorer';
 import { MilkdownEditor } from './components/MilkdownEditor';
 import { Canvas } from './components/Canvas';
@@ -28,13 +28,16 @@ export default function App() {
   const [username, setUsername] = useState<string | null>(localStorage.getItem('jays_notes_username'));
   
   const defaultHome = localStorage.getItem('jays_notes_home') || 'Welcome.md';
-  const homeTitle = defaultHome.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
-  const [tabs, setTabs] = useState<TabData[]>([{ id: 'home', type: 'editor', title: homeTitle, path: defaultHome }]);
+  // Restore the last-opened file; fall back to home if none saved
+  const lastFile = localStorage.getItem('jn-last-file') || defaultHome;
+  const lastFileTitle = lastFile.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
+  const [tabs, setTabs] = useState<TabData[]>([{ id: 'home', type: 'editor', title: lastFileTitle, path: lastFile }]);
   const [activeTabId, setActiveTabId] = useState<string | null>('home');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRecentNotesOpen, setIsRecentNotesOpen] = useState(false);
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [leftSidebarTab, setLeftSidebarTab] = useState<'files' | 'search' | 'bookmarks' | 'templates'>('files');
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
@@ -97,12 +100,18 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    setIsLogoutConfirmOpen(true);
+  };
+
+  const doLogout = () => {
     localStorage.removeItem('jays_notes_token');
     localStorage.removeItem('jays_notes_role');
     localStorage.removeItem('jays_notes_username');
+    localStorage.removeItem('jn-last-file');
     setToken(null);
     setRole(null);
     setUsername(null);
+    setIsLogoutConfirmOpen(false);
   };
 
   useEffect(() => {
@@ -522,6 +531,8 @@ export default function App() {
       setTabs(prev => [...prev, newTab]);
     }
     setActiveTabId(path);
+    // Persist so the same file reopens after a page refresh
+    try { localStorage.setItem('jn-last-file', path); } catch (_) { /* quota */ }
     
     // Update history
     if (history[historyIndex] !== path) {
@@ -649,6 +660,37 @@ export default function App() {
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
       />
+
+      {/* Logout confirmation dialog */}
+      {isLogoutConfirmOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-bg-secondary border border-border-color rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center flex-shrink-0">
+                <DoorOpen size={20} className="text-error" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-text-normal text-sm">Log Out?</h3>
+                <p className="text-xs text-text-muted mt-0.5">You'll need to sign in again to access your vault.</p>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5 justify-end">
+              <button
+                onClick={() => setIsLogoutConfirmOpen(false)}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal hover:bg-bg-primary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doLogout}
+                className="px-4 py-1.5 text-sm rounded-lg bg-error text-white hover:bg-error/90 transition-colors font-medium"
+              >
+                Log Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {role === 'admin' && (
         <div className="fixed top-3 right-14 z-[60] bg-red-600 shadow-lg shadow-red-600/20 text-white text-[10px] font-black px-2.5 py-1 rounded-md flex items-center gap-1.5 select-none border border-white/20 pointer-events-none tracking-tighter">
@@ -834,7 +876,7 @@ export default function App() {
           onClick={handleLogout}
           title="Log Out"
         >
-          <LogOut size={20} />
+          <DoorOpen size={20} />
         </button>
       </div>
 
@@ -1208,7 +1250,7 @@ export default function App() {
                           className="w-full text-left px-4 py-2 hover:bg-error/5 rounded-lg border border-transparent hover:border-error/20 transition-all flex items-center justify-between group"
                         >
                           <span className="text-sm text-error">Log Out</span>
-                          <LogOut size={16} className="text-error" />
+                          <DoorOpen size={16} className="text-error" />
                         </button>
                       </div>
                     </div>

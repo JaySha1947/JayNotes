@@ -145,6 +145,9 @@ function tokeniseWords(text: string): WordToken[] {
     if (!w || w.length < 2) continue;
     // Skip pure uppercase acronyms (>=3 chars all caps, e.g. URL, API, NATO)
     if (w.length >= 3 && w === w.toUpperCase()) continue;
+    // Skip camelCase / mixed-internal-caps words (brands like SharePoint, iPhone,
+    // compound proper nouns). A capital letter after position 0 signals this.
+    if (/[A-Z]/.test(w.slice(1))) continue;
     tokens.push({ word: w, offset: m.index });
   }
   return tokens;
