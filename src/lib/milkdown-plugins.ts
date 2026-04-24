@@ -526,7 +526,41 @@ export const listTabPlugin = $prose(() => {
           return execOutdent(view);
         }
 
-        // ── Case 3: Tab — indent selected item(s) ────────────────────────────
+        // ── Case 3: Tab — indent OR insert spaces ────────────────────────────
+        // If the cursor is at the very start of the list item's first text block
+        // (parentOffset === 0, collapsed selection, inside the paragraph child
+        // of the list_item), treat it as a structural indent. Otherwise insert
+        // two spaces so normal text editing inside a list item works naturally.
+        const isCursorAtItemStart = ((): boolean => {
+          // Require a collapsed (cursor-only) selection
+          if ($from.pos !== $to.pos) return false;
+
+          // Walk up from $from to find the containing list_item
+          let listItemDepth = -1;
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type === listItemType) { listItemDepth = d; break; }
+          }
+          if (listItemDepth < 0) return false;
+
+          // The cursor must be in the FIRST child of the list_item (the paragraph
+          // or inline-text block directly inside it). If it is deeper (e.g. inside
+          // a nested list), let indent handle it.
+          if ($from.depth !== listItemDepth + 1) return false;
+
+          // The cursor must be at position 0 within that text block.
+          return $from.parentOffset === 0;
+        })();
+
+        if (!isCursorAtItemStart) {
+          // Insert two spaces at the cursor position (normal text editing)
+          if ($from.parent.isTextblock) {
+            const tr = state.tr.insertText('  ', $from.pos, $to.pos);
+            dispatch(tr);
+            return true;
+          }
+          return false;
+        }
+
         return execIndent(view);
       },
     },
