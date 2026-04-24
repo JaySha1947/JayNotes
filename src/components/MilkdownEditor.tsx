@@ -53,6 +53,12 @@ import {
   WikilinkSuggestion,
 } from '../lib/milkdown-plugins';
 import type { AlignValue } from '../lib/milkdown-plugins';
+import {
+  spellcheckPlugin,
+  spellSuggest,
+  spellAddWord,
+  spellIgnoreOnce,
+} from '../lib/spellcheck-plugin';
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
 
@@ -316,7 +322,8 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(listTabPlugin)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
-      .use(checkboxClickPlugin),
+      .use(checkboxClickPlugin)
+      .use(spellcheckPlugin),
     []
   );
 
@@ -364,6 +371,21 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
   });
+
+  // ── Spell / grammar suggestion popup ─────────────────────────────────────
+  interface SpellPopupState {
+    x: number;
+    y: number;
+    word: string;
+    type: 'spell' | 'grammar';
+    message?: string;      // grammar rule description
+    suggestions: string[];
+    // The ProseMirror position range of the decorated word, so we can replace it
+    from: number;
+    to: number;
+  }
+  const [spellPopup, setSpellPopup] = useState<SpellPopupState | null>(null);
+  const spellPopupRef = useRef<HTMLDivElement | null>(null);
 
   const editorRef = useRef<Editor | null>(null);
   const templateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -745,6 +767,28 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       window.removeEventListener('resize', close);
     };
   }, [ctxMenu]);
+
+  // Close spell popup on outside click / Escape / scroll
+  useEffect(() => {
+    if (!spellPopup) return;
+    const close = () => setSpellPopup(null);
+    const onMouseDown = (e: MouseEvent) => {
+      if (spellPopupRef.current?.contains(e.target as Node)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const container = editorContainerRef.current;
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKey);
+    container?.addEventListener('scroll', close);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKey);
+      container?.removeEventListener('scroll', close);
+      window.removeEventListener('resize', close);
+    };
+  }, [spellPopup]);
 
   // Toolbar command (focus then rAF)
   const cmd = useCallback((command: any, payload?: any) => {
@@ -1235,12 +1279,73 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       <div
         ref={editorContainerRef}
         className="flex-grow min-w-0 overflow-auto custom-scrollbar relative"
+        onClick={(e) => {
+          // Detect clicks on spell/grammar decorated spans and show the popup.
+          // We walk up from the click target to find the decorated element.
+          const target = e.target as HTMLElement;
+          const decorated = target.closest('.jn-spell-error, .jn-grammar-error') as HTMLElement | null;
+          if (!decorated) return;
+
+          const word = decorated.getAttribute('data-jn-word') ?? '';
+          const type = (decorated.getAttribute('data-jn-type') ?? 'spell') as 'spell' | 'grammar';
+          const msg  = decorated.getAttribute('data-jn-msg') ?? undefined;
+
+          // Find the ProseMirror position range for this decoration so we can
+          // replace the word when the user picks a suggestion.
+          const view = getView();
+          let pmFrom = -1, pmTo = -1;
+          if (view) {
+            try {
+              // domAtPos in reverse: find pos from the DOM node
+              const domPos = view.posAtDOM(decorated, 0);
+              pmFrom = domPos;
+              pmTo = domPos + (decorated.textContent?.length ?? word.length);
+            } catch { /* pos lookup failed — suggestions will still work via search */ }
+          }
+
+          const suggs = type === 'spell' ? spellSuggest(word) : [];
+
+          // Position popup just below the clicked element
+          const rect = decorated.getBoundingClientRect();
+          const POPUP_W = 220;
+          const x = Math.min(rect.left, window.innerWidth - POPUP_W - 8);
+          const y = rect.bottom + 4;
+
+          setSpellPopup({ x, y, word, type, message: msg, suggestions: suggs, from: pmFrom, to: pmTo });
+        }}
         onContextMenu={(e) => {
           // Right-click opens the formatting ctx menu at cursor.
           // We don't open on right-click of images, links, or the wikilink
           // dropdown so the native browser menu still works there when useful.
+          // Right-clicking a spell/grammar decoration opens the spell popup instead.
           const target = e.target as HTMLElement;
           if (target.closest('img, a, .jn-wikilink-dropdown')) return;
+
+          // Check for spell/grammar decoration
+          const decorated = target.closest('.jn-spell-error, .jn-grammar-error') as HTMLElement | null;
+          if (decorated) {
+            e.preventDefault();
+            const word = decorated.getAttribute('data-jn-word') ?? '';
+            const type = (decorated.getAttribute('data-jn-type') ?? 'spell') as 'spell' | 'grammar';
+            const msg  = decorated.getAttribute('data-jn-msg') ?? undefined;
+            const view = getView();
+            let pmFrom = -1, pmTo = -1;
+            if (view) {
+              try {
+                const domPos = view.posAtDOM(decorated, 0);
+                pmFrom = domPos;
+                pmTo = domPos + (decorated.textContent?.length ?? word.length);
+              } catch { /* ignore */ }
+            }
+            const suggs = type === 'spell' ? spellSuggest(word) : [];
+            const POPUP_W = 220;
+            const x = Math.min(e.clientX, window.innerWidth - POPUP_W - 8);
+            const y = Math.min(e.clientY + 6, window.innerHeight - 200);
+            setSpellPopup({ x, y, word, type, message: msg, suggestions: suggs, from: pmFrom, to: pmTo });
+            setCtxMenu(null);
+            return;
+          }
+
           e.preventDefault();
           // Capture the current ProseMirror selection BEFORE the contextmenu
           // event can cause the browser to collapse it. All ctx menu actions
@@ -1543,6 +1648,101 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           </div>
         </div>
       )}
+
+      {/* ── Spell / grammar suggestion popup ─────────────────────────────── */}
+      {spellPopup && (() => {
+        const { x, y, word, type, message, suggestions: suggs, from: pmFrom, to: pmTo } = spellPopup;
+
+        /** Replace the decorated word in the editor with `replacement`. */
+        const applyReplacement = (replacement: string) => {
+          const view = getView();
+          if (view && pmFrom >= 0 && pmTo > pmFrom) {
+            try {
+              const tr = view.state.tr.replaceWith(
+                pmFrom, pmTo,
+                view.state.schema.text(replacement)
+              );
+              view.dispatch(tr);
+              view.focus();
+            } catch { /* position stale — ignore */ }
+          }
+          setSpellPopup(null);
+        };
+
+        return (
+          <div
+            ref={spellPopupRef}
+            className="jn-spell-popup"
+            style={{ top: y, left: x }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="jn-spell-popup-header">
+              <span className={`jn-spell-badge ${type}`}>
+                {type === 'spell' ? 'Spelling' : 'Grammar'}
+              </span>
+            </div>
+
+            {/* The word/phrase */}
+            <div className="jn-spell-popup-word">"{word}"</div>
+
+            {/* Grammar rule message */}
+            {type === 'grammar' && message && (
+              <div className="jn-spell-grammar-msg">{message}</div>
+            )}
+
+            {/* Suggestions list (spell only) */}
+            {type === 'spell' && (
+              <div className="jn-spell-suggestions">
+                {suggs.length > 0
+                  ? suggs.map(s => (
+                    <button
+                      key={s}
+                      className="jn-spell-suggestion"
+                      onMouseDown={e => { e.preventDefault(); applyReplacement(s); }}
+                    >
+                      {s}
+                    </button>
+                  ))
+                  : <div className="jn-spell-suggestion-none">No suggestions</div>
+                }
+              </div>
+            )}
+
+            {/* Action row */}
+            <div className="jn-spell-popup-actions">
+              <button
+                className="jn-spell-action"
+                onMouseDown={e => {
+                  e.preventDefault();
+                  spellIgnoreOnce(word);
+                  setSpellPopup(null);
+                }}
+              >
+                Ignore
+              </button>
+              {type === 'spell' && (
+                <button
+                  className="jn-spell-action"
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    spellAddWord(word);
+                    setSpellPopup(null);
+                  }}
+                >
+                  Add to dictionary
+                </button>
+              )}
+              <button
+                className="jn-spell-action danger"
+                onMouseDown={e => { e.preventDefault(); setSpellPopup(null); }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

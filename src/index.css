@@ -1458,3 +1458,141 @@ html.light .jn-tree-children::before {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   min-width: 148px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Spell & grammar decorations
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Wavy underline helper — rendered as a CSS background SVG so it works on
+   inline spans without a block box.  The SVG encodes a small sine wave in
+   the theme accent / error colours. */
+.jn-spell-error {
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2.5 Q1.5 0 3 2.5 Q4.5 5 6 2.5' stroke='%23f43f5e' stroke-width='1.2' fill='none'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: 0 100%;
+  background-size: 6px 3px;
+  padding-bottom: 2px;
+  cursor: pointer;
+}
+.jn-grammar-error {
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2.5 Q1.5 0 3 2.5 Q4.5 5 6 2.5' stroke='%23f59e0b' stroke-width='1.2' fill='none'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: 0 100%;
+  background-size: 6px 3px;
+  padding-bottom: 2px;
+  cursor: pointer;
+}
+
+/* ── Spell/grammar suggestion popup ──────────────────────────────────────── */
+
+.jn-spell-popup {
+  position: fixed;
+  z-index: 1200;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  min-width: 180px;
+  max-width: 280px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.jn-spell-popup-header {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.jn-spell-popup-header .jn-spell-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.jn-spell-badge.spell  { background: rgba(244,63,94,0.18); color: #f43f5e; }
+.jn-spell-badge.grammar { background: rgba(245,158,11,0.18); color: #f59e0b; }
+
+.jn-spell-popup-word {
+  padding: 5px 10px 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+  font-style: italic;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.jn-spell-suggestions {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.jn-spell-suggestion {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-normal);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.jn-spell-suggestion:hover {
+  background: var(--bg-primary);
+  color: var(--interactive-accent);
+}
+.jn-spell-suggestion-none {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.jn-spell-grammar-msg {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.jn-spell-popup-actions {
+  padding: 3px 4px;
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-color);
+}
+.jn-spell-action {
+  flex: 1;
+  min-width: 70px;
+  padding: 4px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  text-align: center;
+  white-space: nowrap;
+}
+.jn-spell-action:hover {
+  background: var(--bg-primary);
+  color: var(--text-normal);
+}
+.jn-spell-action.danger:hover {
+  color: var(--error);
+}
