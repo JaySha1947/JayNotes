@@ -1210,130 +1210,135 @@ html.light .jn-tree-children::before {
   border-radius: 2px;
 }
 
-/* ── Ocean ────────────────────────────────────────────────────────────────── */
-.milkdown-wrapper .editor .tableWrapper.jn-table--ocean table {
-  border-color: #2b5278 !important;
+/* ── Sky (light blue) ────────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--sky table {
+  border-color: #93c5fd !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--ocean th {
-  background: #1e3a5f !important;
-  color: #90cdf4 !important;
-  border-color: #2b5278 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--sky th {
+  background: #bfdbfe !important;
+  color: #1e3a5f !important;
+  font-weight: 600 !important;
+  border-color: #93c5fd !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--ocean td {
-  background: #132a46 !important;
-  color: #cfe8ff !important;
-  border-color: #2b5278 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--sky td {
+  background: #eff6ff !important;
+  color: #1e40af !important;
+  border-color: #bfdbfe !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--ocean tr:nth-child(even) td {
-  background: #1a3454 !important;
-}
-
-/* ── Forest ───────────────────────────────────────────────────────────────── */
-.milkdown-wrapper .editor .tableWrapper.jn-table--forest table {
-  border-color: #276749 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--forest th {
-  background: #1a3a2a !important;
-  color: #68d391 !important;
-  border-color: #276749 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--forest td {
-  background: #112a1e !important;
-  color: #c6f6d5 !important;
-  border-color: #276749 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--forest tr:nth-child(even) td {
-  background: #183524 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--sky tr:nth-child(even) td {
+  background: #dbeafe !important;
 }
 
-/* ── Sunset ───────────────────────────────────────────────────────────────── */
-.milkdown-wrapper .editor .tableWrapper.jn-table--sunset table {
-  border-color: #9c4221 !important;
+/* ── Mint (light green) ──────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--mint table {
+  border-color: #6ee7b7 !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--sunset th {
-  background: #7c2d12 !important;
-  color: #fbd38d !important;
-  border-color: #9c4221 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--mint th {
+  background: #bbf7d0 !important;
+  color: #064e3b !important;
+  font-weight: 600 !important;
+  border-color: #6ee7b7 !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--sunset td {
-  background: #5c1e08 !important;
-  color: #fde8d8 !important;
-  border-color: #9c4221 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--mint td {
+  background: #f0fdf4 !important;
+  color: #065f46 !important;
+  border-color: #bbf7d0 !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--sunset tr:nth-child(even) td {
-  background: #6b230e !important;
-}
-
-/* ── Slate ────────────────────────────────────────────────────────────────── */
-.milkdown-wrapper .editor .tableWrapper.jn-table--slate table {
-  border-color: #334155 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--slate th {
-  background: #1e293b !important;
-  color: #94a3b8 !important;
-  border-color: #334155 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--slate td {
-  background: #0f172a !important;
-  color: #e2e8f0 !important;
-  border-color: #334155 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--slate tr:nth-child(even) td {
-  background: #172135 !important;
+.milkdown-wrapper .editor .tableWrapper.jn-table--mint tr:nth-child(even) td {
+  background: #dcfce7 !important;
 }
 
-/* ── Lavender ─────────────────────────────────────────────────────────────── */
+/* ── Peach (light orange) ────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--peach table {
+  border-color: #fdba74 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--peach th {
+  background: #fed7aa !important;
+  color: #7c2d12 !important;
+  font-weight: 600 !important;
+  border-color: #fdba74 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--peach td {
+  background: #fff7ed !important;
+  color: #9a3412 !important;
+  border-color: #fed7aa !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--peach tr:nth-child(even) td {
+  background: #ffedd5 !important;
+}
+
+/* ── Lavender (light purple) ─────────────────────────────────────────────── */
 .milkdown-wrapper .editor .tableWrapper.jn-table--lavender table {
-  border-color: #6d28d9 !important;
+  border-color: #c4b5fd !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--lavender th {
-  background: #4c1d95 !important;
-  color: #c4b5fd !important;
-  border-color: #6d28d9 !important;
+  background: #ddd6fe !important;
+  color: #3b0764 !important;
+  font-weight: 600 !important;
+  border-color: #c4b5fd !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--lavender td {
-  background: #2e1065 !important;
-  color: #ede9fe !important;
-  border-color: #6d28d9 !important;
+  background: #f5f3ff !important;
+  color: #4c1d95 !important;
+  border-color: #ddd6fe !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--lavender tr:nth-child(even) td {
-  background: #3b1577 !important;
+  background: #ede9fe !important;
 }
 
-/* ── Rose ─────────────────────────────────────────────────────────────────── */
+/* ── Rose (light pink) ───────────────────────────────────────────────────── */
 .milkdown-wrapper .editor .tableWrapper.jn-table--rose table {
-  border-color: #be123c !important;
+  border-color: #fda4af !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--rose th {
-  background: #881337 !important;
-  color: #fda4af !important;
-  border-color: #be123c !important;
+  background: #fecdd3 !important;
+  color: #881337 !important;
+  font-weight: 600 !important;
+  border-color: #fda4af !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--rose td {
-  background: #4c0519 !important;
-  color: #ffe4e6 !important;
-  border-color: #be123c !important;
+  background: #fff1f2 !important;
+  color: #9f1239 !important;
+  border-color: #fecdd3 !important;
 }
 .milkdown-wrapper .editor .tableWrapper.jn-table--rose tr:nth-child(even) td {
-  background: #5c0822 !important;
+  background: #ffe4e6 !important;
 }
 
-/* ── Minimal (light/white) ───────────────────────────────────────────────── */
-.milkdown-wrapper .editor .tableWrapper.jn-table--minimal table {
-  border-color: #e2e8f0 !important;
+/* ── Lemon (light yellow) ────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--lemon table {
+  border-color: #fde047 !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--minimal th {
+.milkdown-wrapper .editor .tableWrapper.jn-table--lemon th {
+  background: #fef08a !important;
+  color: #713f12 !important;
+  font-weight: 600 !important;
+  border-color: #fde047 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--lemon td {
+  background: #fefce8 !important;
+  color: #78350f !important;
+  border-color: #fef08a !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--lemon tr:nth-child(even) td {
+  background: #fef9c3 !important;
+}
+
+/* ── Slate (light gray) ──────────────────────────────────────────────────── */
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate table {
+  border-color: #94a3b8 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate th {
+  background: #cbd5e1 !important;
+  color: #0f172a !important;
+  font-weight: 600 !important;
+  border-color: #94a3b8 !important;
+}
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate td {
   background: #f8fafc !important;
   color: #1e293b !important;
-  font-weight: 600 !important;
-  border-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
 }
-.milkdown-wrapper .editor .tableWrapper.jn-table--minimal td {
-  background: #ffffff !important;
-  color: #334155 !important;
-  border-color: #e2e8f0 !important;
-}
-.milkdown-wrapper .editor .tableWrapper.jn-table--minimal tr:nth-child(even) td {
+.milkdown-wrapper .editor .tableWrapper.jn-table--slate tr:nth-child(even) td {
   background: #f1f5f9 !important;
 }
-

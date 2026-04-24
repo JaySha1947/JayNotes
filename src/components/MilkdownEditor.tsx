@@ -216,14 +216,14 @@ const HIGHLIGHT_COLORS = [
 ];
 
 const TABLE_THEMES = [
-  { id: '',          label: 'Default',    preview: ['#363636','#1e1e1e','#dadada'] },
-  { id: 'ocean',     label: 'Ocean',      preview: ['#1e3a5f','#1a4a6e','#cfe8ff'] },
-  { id: 'forest',    label: 'Forest',     preview: ['#1a3a2a','#1e4a32','#c6f6d5'] },
-  { id: 'sunset',    label: 'Sunset',     preview: ['#7c2d12','#9a3412','#fde8d8'] },
-  { id: 'slate',     label: 'Slate',      preview: ['#1e293b','#0f172a','#e2e8f0'] },
-  { id: 'lavender',  label: 'Lavender',   preview: ['#4c1d95','#5b21b6','#ede9fe'] },
-  { id: 'rose',      label: 'Rose',       preview: ['#881337','#9f1239','#ffe4e6'] },
-  { id: 'minimal',   label: 'Minimal',    preview: ['#ffffff','#f8f8f8','#1a1a1a'] },
+  { id: '',          label: 'Default',    preview: ['#363636', '#1e1e1e'] },
+  { id: 'sky',       label: 'Sky',        preview: ['#bfdbfe', '#eff6ff'] },
+  { id: 'mint',      label: 'Mint',       preview: ['#bbf7d0', '#f0fdf4'] },
+  { id: 'peach',     label: 'Peach',      preview: ['#fed7aa', '#fff7ed'] },
+  { id: 'lavender',  label: 'Lavender',   preview: ['#ddd6fe', '#f5f3ff'] },
+  { id: 'rose',      label: 'Rose',       preview: ['#fecdd3', '#fff1f2'] },
+  { id: 'lemon',     label: 'Lemon',      preview: ['#fef08a', '#fefce8'] },
+  { id: 'slate',     label: 'Slate',      preview: ['#cbd5e1', '#f8fafc'] },
 ];
 
 // ─── Inner editor ─────────────────────────────────────────────────────────────
@@ -473,20 +473,24 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       const inTable = isInTable(view.state);
       setShowTableTools(prev => prev !== inTable ? inTable : prev);
 
-      // Sync active theme from data attribute on the current table wrapper
       if (inTable) {
         const { $from } = view.state.selection;
         for (let d = $from.depth; d >= 0; d--) {
           if ($from.node(d).type.name === 'table') {
             const pos = $from.before(d);
             const dom = view.nodeDOM(pos) as HTMLElement | null;
-            const wrapper = dom?.closest('.tableWrapper') as HTMLElement | null;
+            // tableWrapper is the parent of the <table> DOM node
+            const wrapper = (dom as HTMLElement | null)?.closest?.('.tableWrapper') as HTMLElement | null
+              ?? dom?.parentElement as HTMLElement | null;
+            activeTableWrapperRef.current = wrapper;
             if (wrapper) {
               setTableTheme(wrapper.getAttribute('data-jn-theme') ?? '');
             }
             break;
           }
         }
+      } else {
+        activeTableWrapperRef.current = null;
       }
     };
     document.addEventListener('selectionchange', check);
@@ -584,40 +588,20 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   // Apply table theme class to the table wrapper the cursor is currently in.
   // We locate the table DOM node by resolving the ProseMirror cursor position,
   // then walking up the real DOM from the view's nodeDOM at that position.
+  // The wrapper is also stashed in a ref so onMouseDown can access it even
+  // after focus leaves the editor (which fires selectionchange first).
+  const activeTableWrapperRef = useRef<HTMLElement | null>(null);
+
   const cmdTableTheme = useCallback((theme: string) => {
-    const view = getView();
-    if (!view) return;
-
-    // Find the table node position from the cursor
-    const { state } = view;
-    const { $from } = state.selection;
-    let tablePos: number | null = null;
-    for (let d = $from.depth; d >= 0; d--) {
-      if ($from.node(d).type.name === 'table') {
-        tablePos = $from.before(d);
-        break;
-      }
-    }
-    if (tablePos === null) return;
-
-    // Get the DOM node for that table position
-    const tableDom = view.nodeDOM(tablePos) as HTMLElement | null;
-    if (!tableDom) return;
-
-    // Walk up to the .tableWrapper (prosemirror-tables wraps every table in one)
-    const wrapper = tableDom.closest('.tableWrapper') as HTMLElement | null
-      ?? tableDom.parentElement?.closest('.tableWrapper') as HTMLElement | null;
+    const wrapper = activeTableWrapperRef.current;
     if (!wrapper) return;
 
     // Swap theme class
     TABLE_THEMES.forEach(t => { if (t.id) wrapper.classList.remove(`jn-table--${t.id}`); });
     if (theme) wrapper.classList.add(`jn-table--${theme}`);
-
-    // Persist theme in a data attribute so re-renders can restore it
     wrapper.setAttribute('data-jn-theme', theme);
-
     setTableTheme(theme);
-  }, [getView]);
+  }, []);
 
   // Template
   const handleApplyTemplate = async (t: { name: string; path: string; type: string }) => {
@@ -836,7 +820,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
               <button
                 key={t.id}
                 title={t.label}
-                onClick={() => cmdTableTheme(t.id)}
+                onMouseDown={e => { e.preventDefault(); cmdTableTheme(t.id); }}
                 className="jn-table-theme-btn"
                 style={{ outline: tableTheme === t.id ? '2px solid var(--interactive-accent)' : 'none' }}
               >
