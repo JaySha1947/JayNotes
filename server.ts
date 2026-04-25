@@ -14,12 +14,14 @@ import { promises as dnsPromises } from 'dns';
 import net from 'net';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-// Resolve .env from the project root regardless of where PM2/Node starts.
-// We try multiple candidate paths so it works in dev (src/ beside .env) and
-// in prod (compiled to dist/, .env one level up).
-dotenv.config({ path: path.resolve(__dirname, '../.env') });   // prod: dist/ → root
-dotenv.config({ path: path.resolve(__dirname, '.env') });      // dev: same dir
-dotenv.config();                                                // last resort: cwd
+import { fileURLToPath } from 'url';
+// ESM-compatible __dirname (package.json has "type":"module")
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// Try project root (.env sits above dist-server/), then cwd as fallback
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config();
 
 // =============================================================================
 // Configuration & Startup Checks
