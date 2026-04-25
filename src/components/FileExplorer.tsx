@@ -16,6 +16,7 @@ interface FileExplorerProps {
   activeFile: string | null;
   refreshTrigger?: number;
   bookmarks?: string[];
+  onAddToProjectKnowledge?: (notePath: string) => void;
 }
 
 const INDENT = 16; // px per depth level
@@ -180,7 +181,7 @@ const FileTreeItem: React.FC<{
 };
 
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCreateFile, activeFile, refreshTrigger = 0, bookmarks }) => {
+export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCreateFile, activeFile, refreshTrigger = 0, bookmarks, onAddToProjectKnowledge }) => {
   const [files, setFiles] = useState<FileNode[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isFolder: boolean } | null>(null);
   const [promptConfig, setPromptConfig] = useState<{ isOpen: boolean; title: string; defaultValue: string; mode?: 'prompt' | 'confirm'; onConfirm: (val: string) => void } | null>(null);
@@ -558,6 +559,25 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
             >
               Duplicate
             </button>
+          )}
+          {!contextMenu.isFolder && onAddToProjectKnowledge && (
+            <>
+              <div className="border-t border-border-color my-1" />
+              <button
+                className="w-full text-left px-4 py-1.5 text-sm hover:bg-interactive-hover"
+                style={{ color: 'var(--interactive-accent)' }}
+                onClick={() => {
+                  onAddToProjectKnowledge(contextMenu.path);
+                  setContextMenu(null);
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span style={{ fontSize: 13 }}>✦</span>
+                  <span>Add to Project Knowledge</span>
+                </div>
+              </button>
+              <div className="border-t border-border-color my-1" />
+            </>
           )}
           <button 
             className="w-full text-left px-4 py-1.5 text-sm text-text-normal hover:bg-interactive-hover hover:text-interactive-accent"

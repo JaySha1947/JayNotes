@@ -63,6 +63,16 @@ export default function App() {
   const [newPassword, setNewPassword] = useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
+  // Agent Space state
+  const [agentSpaceStatus, setAgentSpaceStatus] = useState<{
+    show: boolean;
+    state: 'loading' | 'success' | 'error' | 'first-time';
+    message: string;
+    projectMdPath?: string;
+    projectMdContent?: string;
+    summaryPath?: string;
+  }>({ show: false, state: 'loading', message: '' });
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordChangeStatus(null);
@@ -88,6 +98,72 @@ export default function App() {
   };
 
   const tabsRef = useRef<HTMLDivElement>(null);
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Add to Project Knowledge
+  // -------------------------------------------------------------------------
+  const handleAddToProjectKnowledge = async (notePath: string) => {
+    const agentSpaceFolder = localStorage.getItem('jays_notes_agent_space_folder') || '2 - Agent Space';
+
+    setAgentSpaceStatus({ show: true, state: 'loading', message: 'Summarizing note — this may take a moment…' });
+
+    try {
+      const res = await apiFetch('/api/agent/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notePath, agentSpaceFolder }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAgentSpaceStatus({ show: true, state: 'error', message: data.error || 'Summarization failed.' });
+        setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 5000);
+        return;
+      }
+
+      if (data.isFirstTime) {
+        // First time for this project — prompt user to review Project.md
+        setAgentSpaceStatus({
+          show: true,
+          state: 'first-time',
+          message: `New project detected: "${data.projectName}". A Project.md skeleton has been created. Please review and fill it in before closing.`,
+          projectMdPath: data.projectMdPath,
+          projectMdContent: data.projectMdContent,
+          summaryPath: data.summaryPath,
+        });
+      } else {
+        setAgentSpaceStatus({
+          show: true,
+          state: 'success',
+          message: `✓ Summary saved and Project.md updated.`,
+          summaryPath: data.summaryPath,
+          projectMdPath: data.projectMdPath,
+        });
+        setRefreshTrigger(t => t + 1);
+        setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 4000);
+      }
+    } catch (err: any) {
+      setAgentSpaceStatus({ show: true, state: 'error', message: `Error: ${err.message}` });
+      setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 5000);
+    }
+  };
+
+  const handleAgentSpaceProjectMdSave = async (content: string) => {
+    if (!agentSpaceStatus.projectMdPath) return;
+    try {
+      await apiFetch('/api/agent/project-md', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectMdPath: agentSpaceStatus.projectMdPath, content }),
+      });
+      setRefreshTrigger(t => t + 1);
+      setAgentSpaceStatus({ show: false, state: 'success', message: '' });
+    } catch {
+      // silently close — file was already written by server at skeleton stage
+      setAgentSpaceStatus({ show: false, state: 'success', message: '' });
+    }
+  };
 
   const handleLogin = (newToken: string, newRole: string, newUsername: string) => {
     setToken(newToken);
@@ -661,6 +737,105 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)} 
       />
 
+      {/* ------------------------------------------------------------------ */}
+      {/* Agent Space — Status overlay                                         */}
+      {/* ------------------------------------------------------------------ */}
+      {agentSpaceStatus.show && agentSpaceStatus.state === 'loading' && (
+        <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-border-color rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
+          <div className="w-5 h-5 border-2 rounded-full animate-spin flex-shrink-0" style={{ borderColor: 'var(--interactive-accent)', borderTopColor: 'transparent' }} />
+          <div>
+            <p className="text-xs font-semibold" style={{ color: 'var(--interactive-accent)' }}>✦ Agent Space</p>
+            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
+          </div>
+        </div>
+      )}
+
+      {agentSpaceStatus.show && agentSpaceStatus.state === 'success' && (
+        <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-border-color rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
+          <span className="text-xl flex-shrink-0">✓</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold" style={{ color: 'var(--interactive-accent)' }}>✦ Agent Space</p>
+            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
+            {agentSpaceStatus.summaryPath && (
+              <button
+                className="text-xs underline mt-1 truncate max-w-full text-left"
+                style={{ color: 'var(--interactive-accent)' }}
+                onClick={() => {
+                  if (agentSpaceStatus.summaryPath) handleSelectFile(agentSpaceStatus.summaryPath);
+                  setAgentSpaceStatus(s => ({ ...s, show: false }));
+                }}
+              >
+                Open summary →
+              </button>
+            )}
+          </div>
+          <button onClick={() => setAgentSpaceStatus(s => ({ ...s, show: false }))} className="text-text-muted hover:text-text-normal flex-shrink-0 ml-1">✕</button>
+        </div>
+      )}
+
+      {agentSpaceStatus.show && agentSpaceStatus.state === 'error' && (
+        <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-red-500/40 rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
+          <span className="text-red-500 text-xl flex-shrink-0">✕</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-red-500">✦ Agent Space — Error</p>
+            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
+          </div>
+          <button onClick={() => setAgentSpaceStatus(s => ({ ...s, show: false }))} className="text-text-muted hover:text-text-normal flex-shrink-0 ml-1">✕</button>
+        </div>
+      )}
+
+      {/* First-time Project.md review modal */}
+      {agentSpaceStatus.show && agentSpaceStatus.state === 'first-time' && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-2xl mx-4" style={{ maxHeight: '85vh' }}>
+            {/* Header */}
+            <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
+              <span style={{ color: 'var(--interactive-accent)', fontSize: 20 }}>✦</span>
+              <div className="flex-1 min-w-0">
+                <h2 className="font-semibold text-text-normal">New Project Detected</h2>
+                <p className="text-xs text-text-muted mt-0.5">{agentSpaceStatus.message}</p>
+              </div>
+            </div>
+            {/* Editor */}
+            <div className="flex-1 overflow-y-auto p-4 min-h-0">
+              <p className="text-xs text-text-muted mb-2">
+                Edit <code className="bg-bg-secondary px-1 rounded">{agentSpaceStatus.projectMdPath}</code> — fill in project description, stakeholders, and context. This becomes the persistent memory agents use to answer your questions.
+              </p>
+              <textarea
+                className="w-full bg-bg-secondary border border-border-color rounded-lg p-3 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none font-mono"
+                style={{ minHeight: 380 }}
+                defaultValue={agentSpaceStatus.projectMdContent || ''}
+                onChange={e => setAgentSpaceStatus(s => ({ ...s, projectMdContent: e.target.value }))}
+              />
+            </div>
+            {/* Footer */}
+            <div className="flex items-center justify-between px-6 py-4 border-t border-border-color flex-shrink-0 gap-3">
+              <p className="text-xs text-text-muted">
+                Summary was saved to <code className="bg-bg-secondary px-1 rounded">{agentSpaceStatus.summaryPath}</code>
+              </p>
+              <div className="flex gap-2 flex-shrink-0">
+                <button
+                  onClick={() => {
+                    setAgentSpaceStatus(s => ({ ...s, show: false }));
+                    setRefreshTrigger(t => t + 1);
+                  }}
+                  className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal hover:bg-bg-secondary transition-colors"
+                >
+                  Skip for now
+                </button>
+                <button
+                  onClick={() => handleAgentSpaceProjectMdSave(agentSpaceStatus.projectMdContent || '')}
+                  className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
+                  style={{ background: 'var(--interactive-accent)' }}
+                >
+                  Save Project.md
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Logout confirmation dialog */}
       {isLogoutConfirmOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -904,6 +1079,7 @@ export default function App() {
                         refreshTrigger={refreshTrigger}
                         onSelectFile={handleSelectFile} 
                         onCreateFile={(folderPath, type) => handleNewFile(undefined, folderPath, type as 'file' | 'canvas')}
+                        onAddToProjectKnowledge={handleAddToProjectKnowledge}
                       />
                     </div>
                   </>

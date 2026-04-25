@@ -19,6 +19,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = React.useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [agentSpaceFolder, setAgentSpaceFolder] = React.useState(
+    localStorage.getItem('jays_notes_agent_space_folder') || '2 - Agent Space'
+  );
+  const [agentFolderSaved, setAgentFolderSaved] = React.useState(false);
   const userRole = localStorage.getItem('jays_notes_role');
   const isAdmin = userRole === 'admin';
 
@@ -77,6 +81,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           >
             Security
           </button>
+          <button
+            className={`text-left px-4 py-2 flex items-center gap-1.5 ${activeTab === 'agent_space' ? 'bg-interactive-hover text-interactive-accent' : 'text-text-normal hover:bg-interactive-hover'}`}
+            onClick={() => setActiveTab('agent_space')}
+          >
+            <span style={{ fontSize: 13 }}>✦</span> Agent Space
+          </button>
           
           {isAdmin && (
             <>
@@ -105,7 +115,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         <div className="flex-grow flex flex-col bg-bg-primary">
           <div className="h-12 border-b border-border-color flex items-center justify-between px-6">
             <h2 className="text-lg font-semibold text-text-normal capitalize">
-              {activeTab === 'files' ? 'Files & Links' : activeTab === 'admin_storage' ? 'Master Storage (All Users)' : activeTab}
+              {activeTab === 'files' ? 'Files & Links' : activeTab === 'admin_storage' ? 'Master Storage (All Users)' : activeTab === 'agent_space' ? '✦ Agent Space' : activeTab}
             </h2>
             <button onClick={onClose} className="text-text-muted hover:text-text-normal">
               <X size={20} />
@@ -294,6 +304,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
             {activeTab === 'admin_storage' && isAdmin && (
               <AdminFileExplorer />
+            )}
+
+            {activeTab === 'agent_space' && (
+              <div className="space-y-6">
+                <div>
+                  <h3 className="text-text-normal font-medium mb-1">Agent Space Folder</h3>
+                  <p className="text-sm text-text-muted mb-3">
+                    The folder in your vault where project knowledge is stored. Right-clicking any note and choosing
+                    <span className="text-interactive-accent font-medium"> ✦ Add to Project Knowledge</span> will mirror the note's folder
+                    structure here, generate a structured meeting summary, and maintain a <code className="bg-bg-secondary px-1 rounded">Project.md</code> per project.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={agentSpaceFolder}
+                      onChange={e => { setAgentSpaceFolder(e.target.value); setAgentFolderSaved(false); }}
+                      placeholder="e.g. 2 - Agent Space"
+                      className="flex-1 bg-bg-secondary border border-border-color rounded px-3 py-2 outline-none focus:border-interactive-accent transition-colors text-sm text-text-normal"
+                    />
+                    <button
+                      onClick={() => {
+                        const trimmed = agentSpaceFolder.trim();
+                        if (!trimmed) return;
+                        localStorage.setItem('jays_notes_agent_space_folder', trimmed);
+                        setAgentFolderSaved(true);
+                        setTimeout(() => setAgentFolderSaved(false), 2500);
+                      }}
+                      className="bg-interactive-accent hover:bg-interactive-accent/90 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                  {agentFolderSaved && (
+                    <p className="text-sm text-green-500 mt-2">✓ Saved — new summaries will use this folder.</p>
+                  )}
+                </div>
+
+                <div className="border-t border-border-color pt-5">
+                  <h3 className="text-text-normal font-medium mb-1">How it works</h3>
+                  <ol className="text-sm text-text-muted space-y-2 list-decimal list-inside">
+                    <li>Right-click any <code className="bg-bg-secondary px-1 rounded">.md</code> note → <span className="text-interactive-accent">✦ Add to Project Knowledge</span></li>
+                    <li>The note is sent to the LLM (via OpenRouter) and summarized into structured sections: attendees, decisions, action items, discussion details, open questions, verbatim highlights.</li>
+                    <li>The summary is saved under <code className="bg-bg-secondary px-1 rounded">Agent Space / &lt;mirrored path&gt; / Meeting Summary / YYYY-MM-DD — Note Name.md</code></li>
+                    <li>A <code className="bg-bg-secondary px-1 rounded">Project.md</code> is created (first time) or intelligently updated (returning visits) with merged project context.</li>
+                    <li>On first use per project, you'll be prompted to review and fill in the <code className="bg-bg-secondary px-1 rounded">Project.md</code> skeleton.</li>
+                  </ol>
+                </div>
+
+                <div className="border-t border-border-color pt-5">
+                  <h3 className="text-text-normal font-medium mb-2">LLM Configuration</h3>
+                  <p className="text-sm text-text-muted">
+                    The model and API key are set server-side in your <code className="bg-bg-secondary px-1 rounded">.env</code> file:
+                  </p>
+                  <pre className="mt-2 bg-bg-secondary text-text-muted text-xs rounded p-3 overflow-x-auto">{`OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_MODEL=openai/gpt-5.5
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`}</pre>
+                </div>
+              </div>
             )}
           </div>
         </div>

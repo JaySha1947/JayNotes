@@ -13,6 +13,8 @@ import helmet from 'helmet';
 import { promises as dnsPromises } from 'dns';
 import net from 'net';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
+dotenv.config();
 
 // =============================================================================
 // Configuration & Startup Checks
@@ -38,6 +40,13 @@ const MAX_UPLOAD_SIZE = Number(process.env.MAX_UPLOAD_SIZE) || 50 * 1024 * 1024;
 const BCRYPT_ROUNDS = 12;
 const ENABLE_IFRAME_PROXY = process.env.ENABLE_IFRAME_PROXY !== 'false';
 const IS_DEV = process.env.NODE_ENV !== 'production';
+
+// =============================================================================
+// Agent Space — OpenRouter Configuration
+// =============================================================================
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-5.5';
+const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
 
 // Allowed MIME types for user uploads
 const ALLOWED_MIME_TYPES = new Set([
@@ -1371,6 +1380,308 @@ app.get('/api/templates', authHeaderOnly, (req: any, res) => {
   } catch (error) {
     console.error('Error fetching templates:', error);
     res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
+// =============================================================================
+// Agent Space Routes
+// =============================================================================
+
+/**
+ * Call OpenRouter with a system + user prompt.
+ * Returns the assistant message text.
+ */
+async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise<string> {
+  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set in .env');
+
+  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://jaynotes.app',
+      'X-Title': 'JayNotes Agent Space',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.2, // low temp — we want factual, complete, no hallucination
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenRouter API error ${response.status}: ${err}`);
+  }
+
+  const data: any = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') throw new Error('Unexpected OpenRouter response shape');
+  return content.trim();
+}
+
+/**
+ * Derive the AgentSpace mirror path for a note.
+ *
+ * Given:
+ *   notePath       = "1 - Raw/01 Clients/01 Pfizer/01 AI Transformation Journey/meeting-01.md"
+ *   agentSpaceRoot = "2 - Agent Space"   (relative to vault)
+ *
+ * Returns:
+ *   mirrorRelDir  = "2 - Agent Space/01 Clients/01 Pfizer/01 AI Transformation Journey"
+ *   projectName   = "01 AI Transformation Journey"
+ *
+ * Strategy: strip the first path segment (e.g. "1 - Raw") and the filename,
+ * then prepend agentSpaceRoot. This keeps the client / project hierarchy intact.
+ */
+function deriveMirrorPaths(notePath: string, agentSpaceRoot: string) {
+  // Normalise separators
+  const parts = notePath.split(/[\\/]/).filter(Boolean);
+  // parts[0]  = top-level user folder ("1 - Raw")
+  // parts[-1] = filename ("meeting-01.md")
+  // parts[1..-2] = the hierarchy we want to mirror
+  const hierarchy = parts.slice(1, -1); // drop first folder + filename
+  const projectName = hierarchy[hierarchy.length - 1] || 'Unknown Project';
+  const mirrorRelDir = [agentSpaceRoot, ...hierarchy].join('/');
+  const meetingSummaryRelDir = `${mirrorRelDir}/Meeting Summary`;
+  const projectMdRelPath = `${mirrorRelDir}/Project.md`;
+  return { mirrorRelDir, meetingSummaryRelDir, projectMdRelPath, projectName, hierarchy };
+}
+
+/** Skeleton Project.md written on first encounter of a project. */
+function buildSkeletonProjectMd(projectName: string): string {
+  return `---
+project_name: "${projectName}"
+project_description: ""
+stakeholders:
+  client: []
+  internal: []
+---
+
+# ${projectName}
+
+## Project Description
+<!-- Describe the project goals, scope, and context here. -->
+
+## Stakeholders
+### Client
+<!-- e.g. - Jane Doe (Sponsor) -->
+
+### Internal
+<!-- e.g. - John Smith (Engagement Lead) -->
+
+## Discussion Items
+<!-- Running log of topics discussed across meetings. -->
+
+## Key Decisions
+<!-- Decisions that have been made and are in effect. -->
+
+## Open Questions
+<!-- Questions that are still unresolved. -->
+
+## Next Steps
+<!-- The most current forward-looking actions. -->
+
+## Active Action Items
+### Internal
+<!-- - [ ] Owner: Task description (Due: date) -->
+
+### Client
+<!-- - [ ] Owner: Task description (Due: date) -->
+
+## Completed Action Items
+<!-- - [x] Owner: Task description (Completed: date) -->
+
+## Important Tags
+<!-- #tag1 #tag2 -->
+
+## Important Links
+<!-- [[Note Title]] or https://... -->
+`;
+}
+
+// POST /api/agent/summarize
+// Body: { notePath: string, agentSpaceFolder: string }
+// Reads the note, calls OpenRouter for a structured summary, writes it to
+// AgentSpace, then (if Project.md exists) calls OpenRouter to merge-update it.
+app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
+  const { vaultPath } = getUserScope(req.user.username);
+  const { notePath, agentSpaceFolder } = req.body;
+
+  if (typeof notePath !== 'string' || !notePath.endsWith('.md'))
+    return res.status(400).json({ error: 'notePath must be a .md file path' });
+  if (typeof agentSpaceFolder !== 'string' || !agentSpaceFolder.trim())
+    return res.status(400).json({ error: 'agentSpaceFolder is required' });
+
+  // --- Resolve & validate paths ---
+  const noteAbsPath = safeJoin(vaultPath, notePath);
+  if (!noteAbsPath) return res.status(403).json({ error: 'Access denied' });
+  if (!fs.existsSync(noteAbsPath)) return res.status(404).json({ error: 'Note not found' });
+
+  const noteContent = fs.readFileSync(noteAbsPath, 'utf-8');
+  const noteStat = fs.statSync(noteAbsPath);
+  const noteModDate = new Date(noteStat.mtimeMs);
+  const dateStr = noteModDate.toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Original filename without extension, used in summary filename
+  const noteBaseName = path.basename(notePath, '.md');
+  const summaryFileName = `${dateStr} — ${noteBaseName}.md`;
+
+  // --- Derive mirror structure ---
+  const { meetingSummaryRelDir, projectMdRelPath, projectName, mirrorRelDir } =
+    deriveMirrorPaths(notePath, agentSpaceFolder.trim());
+
+  const meetingSummaryAbsDir = safeJoin(vaultPath, meetingSummaryRelDir);
+  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
+  const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
+
+  if (!meetingSummaryAbsDir || !projectMdAbsPath || !summaryAbsPath)
+    return res.status(403).json({ error: 'Derived paths escape vault — check agentSpaceFolder value' });
+
+  // --- Ensure folder structure exists ---
+  if (!fs.existsSync(meetingSummaryAbsDir)) fs.mkdirSync(meetingSummaryAbsDir, { recursive: true });
+
+  // --- First-time project setup ---
+  const isFirstTime = !fs.existsSync(projectMdAbsPath);
+  if (isFirstTime) {
+    fs.writeFileSync(projectMdAbsPath, buildSkeletonProjectMd(projectName), 'utf-8');
+  }
+
+  const projectMdContent = fs.readFileSync(projectMdAbsPath, 'utf-8');
+
+  // --- Build summarization prompt ---
+  const summarizeSystemPrompt = `You are an expert meeting analyst and knowledge engineer embedded in a consulting firm's note-taking system.
+Your job is to produce a COMPLETE, LOSSLESS structured summary of a meeting note.
+The summary will be read by AI agents to answer questions — so include EVERY detail: numbers, names, dates, opinions, concerns, commitments, and context.
+Do not compress or omit anything material. When in doubt, include it.
+
+Output ONLY the Markdown document below — no preamble, no explanation.`;
+
+  const summarizeUserPrompt = `## Project Context (Project.md)
+${projectMdContent}
+
+---
+
+## Meeting Note to Summarize
+File: ${notePath}
+Last modified: ${noteModDate.toUTCString()}
+
+${noteContent}
+
+---
+
+Produce the structured meeting summary as a Markdown document with EXACTLY these sections.
+Under each section, be exhaustive — capture every detail from the note.
+
+# Meeting Summary: ${noteBaseName}
+**Date:** ${dateStr}
+**Source note:** ${notePath}
+
+## Attendees
+List every person mentioned (name, role/title, company if known).
+
+## Context & Background
+What project/situation does this meeting relate to? What was the state of affairs going into this meeting?
+
+## Discussion Items
+For EACH topic discussed: a sub-heading, a complete account of what was said, who said it (if attributable), and any nuance or disagreement.
+
+## Key Decisions
+Every decision made — what was decided, who decided it, any conditions or caveats.
+
+## Action Items
+Every task committed to — owner, description, due date (if stated). Mark as Internal or Client-side.
+
+## Open Questions & Risks
+Unresolved questions, concerns raised, risks flagged — even if only mentioned briefly.
+
+## Verbatim Highlights
+Any exact quotes, specific numbers, metrics, thresholds, or named artefacts (tools, documents, systems) that appeared in the note. These are especially important for agents.
+
+## Next Steps
+Forward-looking intent expressed in the meeting — what happens next, who drives it.`;
+
+  let summaryContent: string;
+  try {
+    summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
+  } catch (err: any) {
+    console.error('[agent/summarize] OpenRouter error:', err.message);
+    return res.status(502).json({ error: `LLM call failed: ${err.message}` });
+  }
+
+  // --- Write summary file ---
+  fs.writeFileSync(summaryAbsPath, summaryContent, 'utf-8');
+
+  // --- Update Project.md (skip on first time — user reviews skeleton first) ---
+  let updatedProjectMd: string | null = null;
+  if (!isFirstTime) {
+    const mergeSystemPrompt = `You are maintaining a living project knowledge file (Project.md) for a consulting engagement.
+You will receive the CURRENT Project.md and a fresh meeting summary.
+Your job is to intelligently merge the new information into Project.md:
+- Update fields that have changed (e.g. next steps, open questions, action items)
+- Add new stakeholders, decisions, or discussion items — never delete existing ones unless explicitly superseded
+- Move completed action items to "Completed Action Items"
+- Keep the exact same Markdown structure and headings as the input Project.md
+- Do NOT compress or lose historical detail — add to it, don't replace it
+Output ONLY the updated Project.md content, no preamble.`;
+
+    const mergeUserPrompt = `## Current Project.md
+${projectMdContent}
+
+---
+
+## New Meeting Summary (just added)
+${summaryContent}
+
+---
+
+Produce the updated Project.md. Preserve all existing content. Intelligently integrate new information. Keep the same structure.`;
+
+    try {
+      updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
+      fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
+    } catch (err: any) {
+      // Non-fatal: summary was already saved, just log the merge failure
+      console.error('[agent/summarize] Project.md merge failed:', err.message);
+    }
+  }
+
+  res.json({
+    success: true,
+    summaryPath: `${meetingSummaryRelDir}/${summaryFileName}`,
+    projectMdPath: projectMdRelPath,
+    isFirstTime,
+    projectMdContent: isFirstTime ? buildSkeletonProjectMd(projectName) : (updatedProjectMd || projectMdContent),
+    mirrorRelDir,
+    projectName,
+  });
+});
+
+// POST /api/agent/project-md
+// Body: { projectMdPath: string, content: string }
+// Saves user-edited Project.md content.
+app.post('/api/agent/project-md', authHeaderOnly, (req: any, res) => {
+  const { vaultPath } = getUserScope(req.user.username);
+  const { projectMdPath, content } = req.body;
+
+  if (typeof projectMdPath !== 'string' || !projectMdPath.endsWith('.md'))
+    return res.status(400).json({ error: 'projectMdPath must be a .md path' });
+  if (typeof content !== 'string')
+    return res.status(400).json({ error: 'content is required' });
+
+  const absPath = safeJoin(vaultPath, projectMdPath);
+  if (!absPath) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const dir = path.dirname(absPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(absPath, content, 'utf-8');
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to save Project.md' });
   }
 });
 
