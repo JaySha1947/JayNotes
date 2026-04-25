@@ -40,9 +40,11 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
-  tagDecoratorPlugin, wikilinkPlugin, checkboxClickPlugin, listTabPlugin,
+  tagDecoratorPlugin, wikilinkPlugin, hashtagPlugin, checkboxClickPlugin, listTabPlugin,
   setWikilinkFileList, setOpenFileCallback,
+  setHashtagList,
   subscribeToWikilinkSuggestions, unsubscribeWikilinkSuggestions,
+  subscribeToHashtagSuggestions, unsubscribeHashtagSuggestions,
   execWrapInList, execLiftBlockquote, execInsertChecklist,
   execIndent, execOutdent,
   fontColorMark, highlightMark, applyFontColor, applyHighlight,
@@ -54,6 +56,7 @@ import {
   jnHtmlMarksRemarkPlugin,
   findPlugin,
   WikilinkSuggestion,
+  HashtagSuggestion,
 } from '../lib/milkdown-plugins';
 import type { AlignValue } from '../lib/milkdown-plugins';
 import {
@@ -385,6 +388,7 @@ const InnerMilkdown: React.FC<InnerProps> = ({ initialContent, editorRef, onMark
       .use(listTabPlugin)
       .use(tagDecoratorPlugin)
       .use(wikilinkPlugin)
+      .use(hashtagPlugin)
       .use(checkboxClickPlugin)
       .use(spellcheckPlugin)
       .use(findPlugin),
@@ -545,6 +549,9 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const [suggestions, setSuggestions] = useState<WikilinkSuggestion>({
     active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
   });
+  const [hashtagSuggestions, setHashtagSuggestions] = useState<HashtagSuggestion>({
+    active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
+  });
 
   // ── Spell / grammar suggestion popup ─────────────────────────────────────
   interface SpellPopupState {
@@ -590,6 +597,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   currentFileRef.current = filePath;
   const sugRef = useRef(suggestions);
   sugRef.current = suggestions;
+  const hashtagSugRef = useRef(hashtagSuggestions);
+  hashtagSugRef.current = hashtagSuggestions;
   // ── Contextual formatting menu + F4 repeat-last-action state ────────────
   // Hoisted up here so the close-ctx-menu useEffect (declared later near the
   // other outside-click effects) can depend on `ctxMenu` without a
@@ -832,11 +841,24 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     }).catch(() => {});
   }, []);
 
+  // Hashtag list for hashtag autocomplete — refreshed on mount and whenever files change
+  const refreshHashtagList = useCallback(() => {
+    apiFetch('/api/tags').then(r => r.json()).then((data: { tag: string }[]) => {
+      setHashtagList(data.map((t: { tag: string }) => t.tag.replace(/^#/, '')));
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     refreshFileList();
     window.addEventListener('file-saved', refreshFileList);
     return () => window.removeEventListener('file-saved', refreshFileList);
   }, [refreshFileList]);
+
+  useEffect(() => {
+    refreshHashtagList();
+    window.addEventListener('file-saved', refreshHashtagList);
+    return () => window.removeEventListener('file-saved', refreshHashtagList);
+  }, [refreshHashtagList]);
 
   // Wikilink suggestions
   useEffect(() => {
@@ -844,7 +866,13 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     return () => unsubscribeWikilinkSuggestions();
   }, []);
 
-  // Keyboard nav for dropdown
+  // Hashtag suggestions
+  useEffect(() => {
+    subscribeToHashtagSuggestions(s => setHashtagSuggestions({ ...s }));
+    return () => unsubscribeHashtagSuggestions();
+  }, []);
+
+  // Keyboard nav for wikilink dropdown
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const s = sugRef.current;
@@ -853,6 +881,20 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       else if (e.key === 'ArrowUp') { e.preventDefault(); setSuggestions(p => ({ ...p, selectedIndex: Math.max(p.selectedIndex - 1, 0) })); }
       else if ((e.key === 'Enter' || e.key === 'Tab') && s.suggestions[s.selectedIndex]) { e.preventDefault(); insertWikilink(s.suggestions[s.selectedIndex]); }
       else if (e.key === 'Escape') setSuggestions(p => ({ ...p, active: false }));
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, []);
+
+  // Keyboard nav for hashtag dropdown
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const s = hashtagSugRef.current;
+      if (!s.active) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); setHashtagSuggestions(p => ({ ...p, selectedIndex: Math.min(p.selectedIndex + 1, p.suggestions.length - 1) })); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setHashtagSuggestions(p => ({ ...p, selectedIndex: Math.max(p.selectedIndex - 1, 0) })); }
+      else if ((e.key === 'Enter' || e.key === 'Tab') && s.suggestions[s.selectedIndex]) { e.preventDefault(); insertHashtag(s.suggestions[s.selectedIndex]); }
+      else if (e.key === 'Escape') setHashtagSuggestions(p => ({ ...p, active: false }));
     };
     window.addEventListener('keydown', h, true);
     return () => window.removeEventListener('keydown', h, true);
@@ -869,6 +911,20 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       setSuggestions({ active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null });
       view.focus();
     } catch (err) { console.error('[insertWikilink]', err); }
+  }, []);
+
+  const insertHashtag = useCallback((tag: string) => {
+    const inst = editorRef.current;
+    if (!inst) return;
+    const s = hashtagSugRef.current;
+    try {
+      const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
+      if (!view) return;
+      // Replace from the `#` position up to current cursor with `#tag `
+      view.dispatch(view.state.tr.replaceWith(s.from, s.to, view.state.schema.text(`#${tag} `)));
+      setHashtagSuggestions({ active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null });
+      view.focus();
+    } catch (err) { console.error('[insertHashtag]', err); }
   }, []);
 
   // Themes extracted from markdown comments during load — restored after editor mounts
@@ -1984,6 +2040,32 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   onMouseDown={e => { e.preventDefault(); insertWikilink(s); }}>
                   <span className="jn-wikilink-option-icon">📄</span>
                   <span className="jn-wikilink-option-label">{s}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+        {hashtagSuggestions.active && hashtagSuggestions.suggestions.length > 0 && (() => {
+          const container = editorContainerRef.current;
+          let style: React.CSSProperties = { top: 8, left: 20 };
+          if (container && hashtagSuggestions.coords) {
+            const rect = container.getBoundingClientRect();
+            const left = Math.max(8, hashtagSuggestions.coords.left - rect.left + container.scrollLeft);
+            const top = hashtagSuggestions.coords.bottom - rect.top + container.scrollTop + 4;
+            const maxLeft = Math.max(8, container.clientWidth - 240);
+            style = { top, left: Math.min(left, maxLeft) };
+          }
+          return (
+            <div className="jn-hashtag-dropdown" style={style} role="listbox" aria-label="Hashtag suggestions">
+              <div className="jn-hashtag-dropdown-header">Existing tags</div>
+              {hashtagSuggestions.suggestions.map((tag, i) => (
+                <div key={tag}
+                  role="option"
+                  aria-selected={i === hashtagSuggestions.selectedIndex}
+                  className={`jn-hashtag-option${i === hashtagSuggestions.selectedIndex ? ' selected' : ''}`}
+                  onMouseDown={e => { e.preventDefault(); insertHashtag(tag); }}>
+                  <span className="jn-hashtag-option-hash">#</span>
+                  <span className="jn-hashtag-option-label">{tag}</span>
                 </div>
               ))}
             </div>

@@ -41,6 +41,152 @@ export const tagDecoratorPlugin = $prose(() => {
   });
 });
 
+// ─── #hashtag autocomplete ────────────────────────────────────────────────────
+
+let _hashtagList: string[] = [];
+export function setHashtagList(tags: string[]) { _hashtagList = tags; }
+
+export interface HashtagSuggestion {
+  active: boolean;
+  query: string;
+  from: number;
+  to: number;
+  suggestions: string[];
+  selectedIndex: number;
+  coords: { left: number; bottom: number; top: number } | null;
+}
+const EMPTY_HTAG: HashtagSuggestion = {
+  active: false, query: '', from: 0, to: 0, suggestions: [], selectedIndex: 0, coords: null,
+};
+let _htagSug: HashtagSuggestion = { ...EMPTY_HTAG };
+let _htagCb: ((s: HashtagSuggestion) => void) | null = null;
+
+export function subscribeToHashtagSuggestions(cb: (s: HashtagSuggestion) => void) { _htagCb = cb; }
+export function unsubscribeHashtagSuggestions() { _htagCb = null; }
+function notifyHtag(s: HashtagSuggestion) { _htagSug = s; _htagCb?.(s); }
+
+// Only trigger after at least 1 character is typed after `#`
+const MIN_HASHTAG_CHARS = 1;
+
+export const hashtagPlugin = $prose(() => {
+  const key = new PluginKey('jn-hashtag-autocomplete');
+
+  // Completed tag regex — a `#` followed by word chars (no space, no punctuation)
+  const COMPLETED_TAG_RE = /(^|[^\w&#])(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
+
+  function isCursorInsideCompletedTag(state: any, pos: number): boolean {
+    const $pos = state.doc.resolve(pos);
+    const text = $pos.parent.textContent;
+    const offset = $pos.parentOffset;
+    let match;
+    COMPLETED_TAG_RE.lastIndex = 0;
+    while ((match = COMPLETED_TAG_RE.exec(text)) !== null) {
+      const tagStart = match.index + match[1].length;
+      const tagEnd = tagStart + match[2].length;
+      if (tagStart <= offset && offset <= tagEnd) return true;
+    }
+    return false;
+  }
+
+  return new Plugin({
+    key,
+    view() {
+      return {
+        update(view) {
+          const { from, to } = view.state.selection;
+
+          // Dismiss when there is a range selection
+          if (from !== to) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          // Dismiss when cursor is inside an already-completed tag
+          if (isCursorInsideCompletedTag(view.state, from)) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          const $pos = view.state.doc.resolve(from);
+          const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
+
+          // Find the last `#` that could be the start of a tag being typed.
+          // A valid in-progress tag: `#` preceded by start-of-text, whitespace,
+          // or non-word/non-# punctuation — same rule as the decorator.
+          const hashIdx = (() => {
+            for (let i = textBefore.length - 1; i >= 0; i--) {
+              if (textBefore[i] === '#') {
+                const prev = i > 0 ? textBefore[i - 1] : '';
+                const validPrev = prev === '' || /[^\w&#]/.test(prev);
+                if (!validPrev) return -1;
+                return i;
+              }
+              // Stop if we hit a character that can't appear in an in-progress tag
+              if (/[\s\n]/.test(textBefore[i])) return -1;
+            }
+            return -1;
+          })();
+
+          if (hashIdx === -1) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          const partial = textBefore.slice(hashIdx + 1); // text typed after `#`
+
+          // Must have at least MIN_HASHTAG_CHARS after the `#`
+          if (partial.length < MIN_HASHTAG_CHARS) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          // Must only contain valid tag characters so far
+          if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(partial)) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          const q = partial.toLowerCase();
+          const suggestions = _hashtagList
+            .filter(t => t.toLowerCase().startsWith(q))
+            .sort((a, b) => a.localeCompare(b))
+            .slice(0, 10);
+
+          if (suggestions.length === 0) {
+            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
+            return;
+          }
+
+          // docFrom = position of the `#` character in the ProseMirror doc
+          const docFrom = from - partial.length - 1;
+
+          let coords: { left: number; bottom: number; top: number } | null = null;
+          try {
+            const c = view.coordsAtPos(from);
+            coords = { left: c.left, bottom: c.bottom, top: c.top };
+          } catch (_) { /* ignore */ }
+
+          const selectedIndex = Math.min(
+            _htagSug.selectedIndex,
+            Math.max(0, suggestions.length - 1),
+          );
+
+          notifyHtag({
+            active: true,
+            query: partial,
+            from: docFrom,
+            to: from,
+            suggestions,
+            selectedIndex,
+            coords,
+          });
+        },
+        destroy() { notifyHtag({ ...EMPTY_HTAG }); },
+      };
+    },
+  });
+});
+
 // ─── [[wikilink]] decorator + autocomplete + double-click nav ─────────────────
 
 let _fileList: string[] = [];
