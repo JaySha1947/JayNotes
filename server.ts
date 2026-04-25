@@ -14,7 +14,12 @@ import { promises as dnsPromises } from 'dns';
 import net from 'net';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-dotenv.config();
+// Resolve .env from the project root regardless of where PM2/Node starts.
+// We try multiple candidate paths so it works in dev (src/ beside .env) and
+// in prod (compiled to dist/, .env one level up).
+dotenv.config({ path: path.resolve(__dirname, '../.env') });   // prod: dist/ → root
+dotenv.config({ path: path.resolve(__dirname, '.env') });      // dev: same dir
+dotenv.config();                                                // last resort: cwd
 
 // =============================================================================
 // Configuration & Startup Checks
@@ -1392,23 +1397,28 @@ app.get('/api/templates', authHeaderOnly, (req: any, res) => {
  * Returns the assistant message text.
  */
 async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise<string> {
-  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set in .env');
+  // Read at call-time (not module load) so a pm2 restart picks up .env changes.
+  const apiKey = process.env.OPENROUTER_API_KEY || OPENROUTER_API_KEY;
+  const model   = process.env.OPENROUTER_MODEL   || OPENROUTER_MODEL;
+  const baseUrl = process.env.OPENROUTER_BASE_URL || OPENROUTER_BASE_URL;
 
-  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set in .env — add it and run: pm2 restart <app>');
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://jaynotes.app',
       'X-Title': 'JayNotes Agent Space',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.2, // low temp — we want factual, complete, no hallucination
+      temperature: 0.2,
     }),
   });
 
