@@ -71,23 +71,6 @@ const MIN_HASHTAG_CHARS = 1;
 export const hashtagPlugin = $prose(() => {
   const key = new PluginKey('jn-hashtag-autocomplete');
 
-  // Completed tag regex — a `#` followed by word chars (no space, no punctuation)
-  const COMPLETED_TAG_RE = /(^|[^\w&#])(#[a-zA-Z][a-zA-Z0-9_-]*)/g;
-
-  function isCursorInsideCompletedTag(state: any, pos: number): boolean {
-    const $pos = state.doc.resolve(pos);
-    const text = $pos.parent.textContent;
-    const offset = $pos.parentOffset;
-    let match;
-    COMPLETED_TAG_RE.lastIndex = 0;
-    while ((match = COMPLETED_TAG_RE.exec(text)) !== null) {
-      const tagStart = match.index + match[1].length;
-      const tagEnd = tagStart + match[2].length;
-      if (tagStart <= offset && offset <= tagEnd) return true;
-    }
-    return false;
-  }
-
   return new Plugin({
     key,
     view() {
@@ -101,47 +84,19 @@ export const hashtagPlugin = $prose(() => {
             return;
           }
 
-          // Dismiss when cursor is inside an already-completed tag
-          if (isCursorInsideCompletedTag(view.state, from)) {
-            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
-            return;
-          }
-
           const $pos = view.state.doc.resolve(from);
           const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
 
-          // Find the last `#` that could be the start of a tag being typed.
-          // A valid in-progress tag: `#` preceded by start-of-text, whitespace,
-          // or non-word/non-# punctuation — same rule as the decorator.
-          const hashIdx = (() => {
-            for (let i = textBefore.length - 1; i >= 0; i--) {
-              if (textBefore[i] === '#') {
-                const prev = i > 0 ? textBefore[i - 1] : '';
-                const validPrev = prev === '' || /[^\w&#]/.test(prev);
-                if (!validPrev) return -1;
-                return i;
-              }
-              // Stop if we hit a character that can't appear in an in-progress tag
-              if (/[\s\n]/.test(textBefore[i])) return -1;
-            }
-            return -1;
-          })();
+          // Extract the in-progress hashtag: last word-like token ending at cursor
+          // that starts with `#`. We match the last run of non-whitespace chars and
+          // check if it starts with `#` at a valid boundary (or start of text).
+          // Regex: optional non-# non-word char before `#`, then tag chars to end.
+          const m = /(?:^|[^\w&#])#([a-zA-Z][a-zA-Z0-9_-]*)$/.exec(textBefore)
+                 ?? /^#([a-zA-Z][a-zA-Z0-9_-]*)$/.exec(textBefore);
 
-          if (hashIdx === -1) {
-            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
-            return;
-          }
+          const partial = m?.[m.length - 1]; // last capture group = chars after `#`
 
-          const partial = textBefore.slice(hashIdx + 1); // text typed after `#`
-
-          // Must have at least MIN_HASHTAG_CHARS after the `#`
-          if (partial.length < MIN_HASHTAG_CHARS) {
-            if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
-            return;
-          }
-
-          // Must only contain valid tag characters so far
-          if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(partial)) {
+          if (!partial || partial.length < MIN_HASHTAG_CHARS) {
             if (_htagSug.active) notifyHtag({ ...EMPTY_HTAG });
             return;
           }
