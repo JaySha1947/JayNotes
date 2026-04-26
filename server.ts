@@ -1570,57 +1570,81 @@ app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
   // --- Build summarization prompt ---
   // On first time, project context is just the name — skeleton is empty placeholders
   const projectContext = isFirstTime
-    ? `Project: ${projectName}`
-    : `Project context from Project.md:\n${projectMdContent}`;
-  const summarizeSystemPrompt = `You are a sharp meeting analyst for a consulting firm. Your job is to produce a CONCISE, well-structured meeting summary that an AI agent can use to answer questions later.
+    ? `Project name: ${projectName}`
+    : `## Project Context (Project.md)\n${projectMdContent}`;
 
-Rules:
-- Be brief but complete. Use bullet points. No paragraphs of prose.
-- Capture NAMES, DECISIONS, ACTION ITEMS, DATES, and KEY FACTS — these are what agents need.
-- For discussion items: one bullet per topic with the key point only. No verbatim transcription.
-- For quotes: only include a quote if it is uniquely important (e.g. a non-negotiable requirement stated by a named person).
-- Skip pleasantries, filler, and anything that adds no information.
-- Output ONLY the Markdown document. No preamble.`;
+  const summarizeSystemPrompt = `You are a project memory assistant for a markdown notes app.
+Your job is to convert a raw meeting note into a clean, structured meeting summary.
+
+Important principles:
+- Do not invent facts.
+- Use only the raw note and the project context provided.
+- If something is unclear, mark it as unclear.
+- Create useful [[wikilinks]] for clients, projects, people, deliverables, decisions, workstreams, and recurring concepts.
+- Use #tags for classification and search.
+- Do not create research sections.
+- Do not perform external research.
+- Separate client stakeholders, internal senior stakeholders, internal project team, and unknown stakeholders.
+- If the project context lists stakeholders, use it to classify people.
+- If a person is not listed in project context, place them under Unknown / Needs Classification.
+- Classify the meeting type and importance.
+- Return only valid markdown.`;
 
   const summarizeUserPrompt = `${projectContext}
 
-Meeting file: ${notePath}
+## Raw Meeting Note
+File: ${notePath}
 Date: ${dateStr}
 
 ${noteContent}
 
 ---
 
-Produce a structured summary using EXACTLY this format. Be concise — every bullet should earn its place.
+Produce a structured meeting summary in valid markdown using this format:
 
 # ${noteBaseName} — ${dateStr}
-**Source:** ${notePath}
+**Source:** [[${notePath}]]
+**Meeting Type:** (e.g. Client Workshop / Internal Sync / Stakeholder Review)
+**Importance:** (High / Medium / Low)
 
 ## Attendees
-- Name — Role, Company
+### Client Stakeholders
+- [[Name]] — Role
+
+### Internal Senior Stakeholders
+- [[Name]] — Role
+
+### Internal Project Team
+- [[Name]] — Role
+
+### Unknown / Needs Classification
+- Name — context clue if any
 
 ## Key Context
-1-3 bullets on WHY this meeting happened and what the starting situation was.
+- Why this meeting happened and what the situation was going in (2-4 bullets max)
 
 ## Decisions Made
-- [Decision] — Owner/who decided — any conditions
+- [[Decision or outcome]] — Owner — any conditions or caveats
 
 ## Discussion Highlights
-One bullet per major topic. Format: **Topic:** key point or outcome.
+- **[[Topic]]:** key point or outcome (one bullet per topic)
 
 ## Action Items
 ### Internal
-- [ ] Owner: Task (Due: date or "TBD")
+- [ ] [[Owner]]: Task (Due: date or TBD)
 
 ### Client
-- [ ] Owner: Task (Due: date or "TBD")
+- [ ] [[Owner]]: Task (Due: date or TBD)
 
 ## Open Questions
-- Question — who raised it
+- Question — raised by [[Name]]
 
 ## Key Quotes / Non-Negotiables
-Only include if a named person stated something critical as a hard requirement.
-- "Quote" — Name`;
+(Only include if a named person stated a hard requirement or critical position)
+- "Quote" — [[Name]]
+
+## Tags
+#meetingsummary #tag2 #tag3`;
 
   let summaryContent: string;
   try {
@@ -1636,37 +1660,59 @@ Only include if a named person stated something critical as a hard requirement.
   // --- Update Project.md (skip on first time — user reviews skeleton first) ---
   let updatedProjectMd: string | null = null;
   if (!isFirstTime) {
-    const mergeSystemPrompt = `You maintain a concise living Project.md for a consulting engagement.
-You will receive the current Project.md and a new meeting summary.
-Merge the new info in — concisely. This file is a STATUS SNAPSHOT, not an archive.
+    // Load ALL existing meeting summaries for this project so the update
+    // has full context, not just the latest meeting
+    let allSummariesContent = '';
+    try {
+      if (fs.existsSync(meetingSummaryAbsDir)) {
+        const summaryFiles = fs.readdirSync(meetingSummaryAbsDir)
+          .filter(f => f.endsWith('.md'))
+          .sort(); // chronological by filename (YYYY-MM-DD prefix)
+        allSummariesContent = summaryFiles.map(f => {
+          const content = fs.readFileSync(`${meetingSummaryAbsDir}/${f}`, 'utf-8');
+          return `### ${f}\n${content}`;
+        }).join('\n\n---\n\n');
+      }
+    } catch (err) {
+      // fallback to just the latest summary
+      allSummariesContent = summaryContent;
+    }
 
-STRICT RULES:
-1. Output the COMPLETE Project.md with ALL <!-- AI:START --> and <!-- AI:END --> markers preserved exactly.
-2. Only write content BETWEEN the markers. Never touch markers or headings.
-3. Keep each section SHORT — bullet points only, no prose paragraphs.
-4. current_status: update to reflect latest state (1-2 sentences max).
-5. active_actions: add new uncompleted items as "- [ ] Owner: Task (Due: date)". Move done items to completed_actions.
-6. completed_actions: add "- [x] Owner: Task (Completed: date)" for anything finished.
-7. decisions: add new decisions as "- Decision — Owner — date". Keep all existing ones.
-8. unknown_stakeholders: add anyone whose role is unclear.
-9. tags: add relevant new tags only. Keep existing.
-10. links: keep existing. Add new [[links]] only if clearly relevant.
-11. discussion_items, open_questions, next_steps: bullet-point updates only — replace stale items, add new ones.
-12. stakeholders: add new people with role and company. Never remove.
-13. DO NOT copy the full meeting summary into Project.md. Extract only what changed or is new.
-Output ONLY the updated Project.md. No explanation.`;
+    const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
+You will receive:
+1. The existing Project.md
+2. All meeting summaries for the project
+
+Your job:
+- Update the AI-managed sections of Project.md (those between <!-- AI:START --> and <!-- AI:END --> markers).
+- Preserve all USER-managed sections exactly as-is (sections without AI markers).
+- Preserve user-checked completed action items (lines with - [x]).
+- Consolidate action items across meetings — do not duplicate action items.
+- Do not invent facts.
+- Use [[wikilinks]] for clients, projects, people, deliverables, workstreams, and recurring concepts.
+- Use #tags for classification.
+- Client-facing and high-importance meetings should influence Current Status, Decisions, and Key Context more heavily.
+- Internal daily check-ins should mainly influence action items and execution details.
+- Do not let low-importance internal syncs overwrite major client decisions.
+- Keep each AI-managed section concise — bullet points only, no prose paragraphs.
+- Return only the full updated Project.md markdown. No preamble or explanation.
+
+CRITICAL MARKER RULES:
+- Every <!-- AI:START section_name --> and <!-- AI:END section_name --> marker must be preserved exactly.
+- Only write content between the markers — never touch the markers or headings themselves.
+- Do NOT copy full meeting summaries into Project.md — extract only decisions, actions, status changes, and new stakeholders.`;
 
     const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
 
 ---
 
-## New Meeting Summary
-${summaryContent}
+## All Meeting Summaries for This Project
+${allSummariesContent}
 
 ---
 
-Update the Project.md. Stay concise. Preserve all markers. Bullet points only inside sections.`;
+Return the full updated Project.md. Preserve all AI markers exactly. Bullet points only inside AI-managed sections. Do not duplicate action items. Preserve user-checked items.`;
 
     try {
       updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
