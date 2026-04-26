@@ -68,8 +68,8 @@ export const PromptModal: React.FC<PromptModalProps> = ({
             </button>
             <button
               type="submit"
-              className={`flex-1 py-2 text-sm text-white rounded-lg transition-colors font-bold ${
-                mode === 'confirm' ? 'bg-text-danger hover:bg-text-danger/90' : 'bg-interactive-accent hover:bg-opacity-90'
+              className={`flex-1 py-2 text-sm rounded-lg transition-colors font-bold ${
+                mode === 'confirm' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-interactive-accent hover:bg-opacity-90 text-white'
               }`}
               disabled={mode === 'prompt' && !value.trim()}
               ref={mode === 'confirm' ? (inputRef as any) : null}

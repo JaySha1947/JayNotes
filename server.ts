@@ -1532,7 +1532,15 @@ function parseKnownStakeholders(projectMdContent: string): string[] {
     }
   }
 
-  return [...names].filter(n => n.split(' ').length >= 2);
+  return [...names]
+    .filter(n => n.split(' ').length >= 2)
+    // Deduplicate: if we have "Sarah Mitchell - Sponsor" AND "Sarah Mitchell", keep the richer one
+    .filter((name, _i, arr) => {
+      const baseName = name.split(' - ')[0].trim();
+      // Keep this entry if there's no richer version (with role) elsewhere
+      const hasRicher = arr.some(other => other !== name && other.startsWith(baseName + ' - '));
+      return !hasRicher || name.includes(' - ');
+    });
 }
 
 // POST /api/agent/extract
@@ -1750,7 +1758,6 @@ ${noteContent}
 Produce the meeting summary using EXACTLY this template. Blank line between EVERY field.
 
 # ${noteBaseName} - ${dateStr}
-Source: ${notePath}
 Meeting Type: (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
@@ -1774,6 +1781,8 @@ Meeting Type: (Client Workshop / Internal Sync / Stakeholder Review / Discovery 
 
 ### Client
 - [ ] **Name**: Task (Due: date or TBD)
+
+Source: ${notePath}
 
 **Tags:** #meetingsummary #${projectSlug}
 

@@ -1087,10 +1087,16 @@ No current status available yet.
             <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0 space-y-3">
               {agentFlow.stakeholders.map((s, idx) => (
                 <div key={idx} className="flex items-center gap-3 bg-bg-secondary rounded-lg px-3 py-2">
-                  {/* Name chip */}
-                  <div className="flex-shrink-0 min-w-[160px]">
-                    <p className="text-sm font-medium text-text-normal">{s.name}</p>
-                    {s.role && <p className="text-xs text-text-muted">{s.role}</p>}
+                  {/* Editable name + role */}
+                  <div className="flex-shrink-0 min-w-[180px] space-y-1">
+                    <input
+                      type="text"
+                      value={s.name}
+                      onChange={e => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, name: e.target.value } : st) }))}
+                      className="w-full bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                      placeholder="Full name"
+                    />
+                    {s.role && <p className="text-xs text-text-muted px-1 truncate">{s.role}</p>}
                   </div>
                   {/* Classification buttons */}
                   <div className="flex gap-1.5 flex-wrap flex-1">
@@ -1123,8 +1129,16 @@ No current status available yet.
                       }}
                       className="px-2 py-1 text-xs rounded-md border border-border-color bg-bg-primary text-text-muted outline-none focus:border-interactive-accent transition-colors">
                       <option value="">↔ Map to existing…</option>
-                      {(agentFlow.extractData?.knownStakeholders || []).map((known: string) => (
-                        <option key={known} value={known}>{known}</option>
+                      {/* Deduplicate: prefer entries with designation, show name only once */}
+                      {Array.from(new Map(
+                        (agentFlow.extractData?.knownStakeholders || []).map((known: string) => {
+                          const name = known.split(' - ')[0].trim();
+                          return [name, known];
+                        })
+                      ).values()).map((known: string) => (
+                        <option key={known} value={known.split(' - ')[0].trim()}>
+                          {known}
+                        </option>
                       ))}
                     </select>
                   </div>
