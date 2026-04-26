@@ -1442,18 +1442,21 @@ async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise
  * Strategy: strip the first path segment (e.g. "1 - Raw") and the filename,
  * then prepend agentSpaceRoot. This keeps the client / project hierarchy intact.
  */
-function deriveMirrorPaths(notePath: string, agentSpaceRoot: string) {
-  // Normalise separators
+function deriveMirrorPaths(notePath: string, agentSpaceRoot: string, clientName?: string) {
   const parts = notePath.split(/[\\/]/).filter(Boolean);
-  // parts[0]  = top-level user folder ("1 - Raw")
-  // parts[-1] = filename ("meeting-01.md")
-  // parts[1..-2] = the hierarchy we want to mirror
-  const hierarchy = parts.slice(1, -1); // drop first folder + filename
+  const hierarchy = parts.slice(1, -1);
   const projectName = hierarchy[hierarchy.length - 1] || 'Unknown Project';
   const mirrorRelDir = [agentSpaceRoot, ...hierarchy].join('/');
   const meetingSummaryRelDir = `${mirrorRelDir}/Meeting Summary`;
-  const projectMdRelPath = `${mirrorRelDir}/Project.md`;
-  return { mirrorRelDir, meetingSummaryRelDir, projectMdRelPath, projectName, hierarchy };
+
+  // Project file name: ClientName-ProjectName.md (sanitised)
+  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9 _-]/g, '').trim().replace(/\s+/g, '-');
+  const projectFileName = clientName
+    ? `${sanitize(clientName)}-${sanitize(projectName)}.md`
+    : `${sanitize(projectName)}.md`;
+  const projectMdRelPath = `${mirrorRelDir}/${projectFileName}`;
+
+  return { mirrorRelDir, meetingSummaryRelDir, projectMdRelPath, projectName, projectFileName, hierarchy };
 }
 
 /** Skeleton Project.md written on first encounter of a project. */
@@ -1462,11 +1465,11 @@ function buildSkeletonProjectMd(projectName: string): string {
   return `# ${projectName}
 
 ## Project Context
-Client:
-Project: ${projectName}
+**Client:**
+**Project:** ${projectName}
 **Client Stakeholders:**
 **Internal Stakeholders:**
-Project Summary:
+**Project Summary:**
 
 ## Current Status
 No current status available yet.
@@ -1480,8 +1483,8 @@ No current status available yet.
 ## Key Decisions
 (none yet)
 
-Tags: #active-project #${slug}
-Links: [[${projectName}]]
+**Tags:** #active-project #${slug}
+**Links:** [[${projectName}]]
 `;
 }
 
@@ -1489,46 +1492,36 @@ Links: [[${projectName}]]
 // Agent Space Routes
 // =============================================================================
 
-// Helper: parse known stakeholders from Project.md content — handles both marker and marker-free formats
+// Helper: parse known stakeholders from Project.md content
 function parseKnownStakeholders(projectMdContent: string): string[] {
   const names: Set<string> = new Set();
 
-  // 1. New marker-free format: "**Client Stakeholders:** Name — Role, Name — Role"
+  // New format: "**Client Stakeholders:** Name — Role, Name — Role"
   const clientLine = projectMdContent.match(/\*\*Client Stakeholders:\*\*\s*(.+)/);
   if (clientLine) {
     clientLine[1].split(',').forEach(part => {
       const name = part.trim().split(/\s*—\s*/)[0].trim().replace(/\*\*/g, '');
-      if (name && name.length > 1) names.add(name);
+      if (name && name.length > 2) names.add(name);
     });
   }
   const internalLine = projectMdContent.match(/\*\*Internal Stakeholders:\*\*\s*(.+)/);
   if (internalLine) {
     internalLine[1].split(',').forEach(part => {
       const name = part.trim().split(/\s*—\s*/)[0].trim().replace(/\*\*/g, '');
-      if (name && name.length > 1) names.add(name);
+      if (name && name.length > 2) names.add(name);
     });
   }
 
-  // 2. Old marker format fallback: "  - Name — Role" lines inside USER:START block
-  const contextMatch = projectMdContent.match(/<!-- USER:START project_context -->([\s\S]*?)<!-- USER:END project_context -->/);
-  if (contextMatch) {
-    const block = contextMatch[1];
-    const linePattern = /^\s*[-•]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)(?:\s*[—\-–]|\s*\()/gm;
-    let m;
-    while ((m = linePattern.exec(block)) !== null) {
-      const name = m[1].trim();
-      if (!['Client', 'Internal', 'Project', 'Stakeholders'].includes(name)) names.add(name);
-    }
-  }
-
-  // 3. Bold names **Name** in action items / decisions
+  // Bold **Name** in action items / decisions (2+ word names only)
   const boldNames = projectMdContent.matchAll(/\*\*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\*\*/g);
   for (const m of boldNames) {
     const n = m[1];
-    if (!['Client Stakeholders', 'Internal Stakeholders'].includes(n)) names.add(n);
+    if (!['Client Stakeholders', 'Internal Stakeholders', 'Client', 'Project', 'Project Summary', 'Tags', 'Links'].includes(n)) {
+      names.add(n);
+    }
   }
 
-  return [...names].filter(n => n.split(' ').length >= 2); // Only full names (2+ words)
+  return [...names].filter(n => n.split(' ').length >= 2);
 }
 
 // POST /api/agent/extract
@@ -1555,24 +1548,40 @@ app.post('/api/agent/extract', authHeaderOnly, async (req: any, res) => {
   const noteBaseName = path.basename(notePath, '.md');
   const summaryFileName = `${dateStr} — ${noteBaseName}.md`;
 
-  const { meetingSummaryRelDir, projectMdRelPath, projectName, mirrorRelDir } =
+  // Derive paths without clientName first (we'll update after we know it)
+  const { meetingSummaryRelDir, mirrorRelDir, projectName } =
     deriveMirrorPaths(notePath, agentSpaceFolder.trim());
 
   const meetingSummaryAbsDir = safeJoin(vaultPath, meetingSummaryRelDir);
-  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
-  const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
+  const mirrorAbsDir = safeJoin(vaultPath, mirrorRelDir);
 
-  if (!meetingSummaryAbsDir || !projectMdAbsPath || !summaryAbsPath)
+  if (!meetingSummaryAbsDir || !mirrorAbsDir)
     return res.status(403).json({ error: 'Derived paths escape vault' });
 
   if (!fs.existsSync(meetingSummaryAbsDir)) fs.mkdirSync(meetingSummaryAbsDir, { recursive: true });
 
-  const isFirstTime = !fs.existsSync(projectMdAbsPath);
-  if (isFirstTime) {
-    fs.writeFileSync(projectMdAbsPath, buildSkeletonProjectMd(projectName), 'utf-8');
+  // Find existing project file in mirror dir (any .md that isn't inside Meeting Summary)
+  let existingProjectFile: string | null = null;
+  if (fs.existsSync(mirrorAbsDir)) {
+    const files = fs.readdirSync(mirrorAbsDir).filter(f => f.endsWith('.md'));
+    if (files.length > 0) existingProjectFile = files[0]; // take first .md found
   }
 
-  const projectMdContent = fs.readFileSync(projectMdAbsPath, 'utf-8');
+  const isFirstTime = !existingProjectFile;
+  // On first time, use placeholder name — will be renamed when user saves with clientName
+  const projectMdFileName = existingProjectFile || 'Project.md';
+  const projectMdRelPath = `${mirrorRelDir}/${projectMdFileName}`;
+  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
+  const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
+
+  if (!projectMdAbsPath || !summaryAbsPath)
+    return res.status(403).json({ error: 'Derived paths escape vault' });
+
+  if (isFirstTime) {
+    fs.writeFileSync(projectMdAbsPath!, buildSkeletonProjectMd(projectName), 'utf-8');
+  }
+
+  const projectMdContent = fs.readFileSync(projectMdAbsPath!, 'utf-8');
   const knownStakeholders = parseKnownStakeholders(projectMdContent);
 
   // LLM call: extract structured context from the note
@@ -1665,15 +1674,25 @@ app.post('/api/agent/generate-summary', authHeaderOnly, async (req: any, res) =>
     }
   }
 
-  const { meetingSummaryRelDir, projectMdRelPath } = deriveMirrorPaths(notePath, agentSpaceFolder.trim());
+  const { meetingSummaryRelDir, mirrorRelDir } = deriveMirrorPaths(notePath, agentSpaceFolder.trim());
   const meetingSummaryAbsDir = safeJoin(vaultPath, meetingSummaryRelDir);
-  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
+  const mirrorAbsDir = safeJoin(vaultPath, mirrorRelDir);
   const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
 
-  if (!meetingSummaryAbsDir || !projectMdAbsPath || !summaryAbsPath)
+  if (!meetingSummaryAbsDir || !mirrorAbsDir || !summaryAbsPath)
     return res.status(403).json({ error: 'Paths escape vault' });
 
   if (!fs.existsSync(meetingSummaryAbsDir)) fs.mkdirSync(meetingSummaryAbsDir, { recursive: true });
+
+  // Find the project file by scanning mirror dir (supports ClientName-ProjectName.md naming)
+  let projectMdFileName = 'Project.md';
+  if (fs.existsSync(mirrorAbsDir)) {
+    const files = fs.readdirSync(mirrorAbsDir).filter(f => f.endsWith('.md'));
+    if (files.length > 0) projectMdFileName = files[0];
+  }
+  const projectMdRelPath = `${mirrorRelDir}/${projectMdFileName}`;
+  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
+  const projectFileName = projectMdFileName; // e.g. NovaCure-CardioLab.md
   if (!fs.existsSync(projectMdAbsPath))
     return res.status(404).json({ error: 'Project.md not found — save it first' });
 
@@ -1684,8 +1703,8 @@ app.post('/api/agent/generate-summary', authHeaderOnly, async (req: any, res) =>
   const projectName = path.basename(path.dirname(projectMdRelPath));
   const projectSlug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-  // Extract client name from Project.md for Links line
-  const clientMatch = projectMdContent.match(/^Client:\s*(.+)$/m);
+  // Extract client name from Project.md bold label format
+  const clientMatch = projectMdContent.match(/\*\*Client:\*\*\s*(.+)/);
   const clientName = clientMatch ? clientMatch[1].trim() : '';
 
   const summarizeSystemPrompt = `You are a project memory assistant for a markdown notes app.
@@ -1716,7 +1735,7 @@ ${noteContent}
 
 ---
 
-Produce the meeting summary using EXACTLY this template. Every line break matters.
+Produce the meeting summary using EXACTLY this template. Every field on its own line.
 
 # ${noteBaseName} — ${dateStr}
 **Source:** [[${noteBaseName}]]
@@ -1726,10 +1745,9 @@ Produce the meeting summary using EXACTLY this template. Every line break matter
 **Client:** Name — Role, Name — Role
 **Internal:** Name — Role, Name — Role
 
-(Client line and Internal line must be on SEPARATE lines. One line per group listing ALL members comma-separated. Plain bold names, no [[wikilinks]].)
+(Client and Internal MUST be on separate lines. Comma-separated. Plain text — no [[wikilinks]].)
 
 ## Discussion Summary
-(Group by THEME. Bold theme name on its own line, then 1-3 plain bullets. No [[wikilinks]].)
 
 **Theme Name**
 - Key point or decision
@@ -1737,7 +1755,7 @@ Produce the meeting summary using EXACTLY this template. Every line break matter
 ## Action Items
 
 ### Open Questions
-- Question — Name who raised it
+- Question — Name
 
 ### Internal
 - [ ] **Name**: Task (Due: date or TBD)
@@ -1745,19 +1763,18 @@ Produce the meeting summary using EXACTLY this template. Every line break matter
 ### Client
 - [ ] **Name**: Task (Due: date or TBD)
 
-Tags: #meetingsummary #${projectSlug}
-Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
+**Tags:** #meetingsummary #${projectSlug}
+**Links:** [[${projectFileName.replace('.md', '')}]]${clientName ? ` [[${clientName}]]` : ''}
 
-(Tags line and Links line must be on SEPARATE lines. No ## heading for Tags or Links.)
-(Open Questions go INSIDE Action Items as the first sub-section.)`;
+(Tags and Links MUST be on separate lines. No ## heading for Tags or Links.)`;
 
   let summaryContent: string;
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
-    // Defensive: ensure Tags and Links are always on separate lines
+    // Defensive: ensure **Tags:** and **Links:** are always on separate lines
     summaryContent = summaryContent
-      .replace(/\bTags:([^\n]+)\s+Links:/g, 'Tags:$1\nLinks:')
-      .replace(/\bLinks:([^\n]+)\s+Tags:/g, 'Tags:\nLinks:$1');
+      .replace(/(\*\*Tags:\*\*[^\n]+)\s+(\*\*Links:\*\*)/g, '$1\n$2')
+      .replace(/(Tags:[^\n]+)\s+(Links:)/g, '$1\nLinks:');
   } catch (err: any) {
     console.error('[agent/generate-summary] summary LLM failed:', err.message);
     return res.status(502).json({ error: `Summary generation failed: ${err.message}` });
@@ -1790,19 +1807,15 @@ Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
     }
   } catch { /* ignore */ }
 
-  // Extract the Project Context block BEFORE passing to LLM.
-  // We re-inject it verbatim after LLM runs so it can never be reformatted.
+  // Extract the Project Context block BEFORE passing to LLM — re-injected verbatim after.
   const projectContextMatch = projectMdContent.match(/(## Project Context\n[\s\S]*?\n\n)/);
   const projectContextBlock = projectContextMatch ? projectContextMatch[1] : null;
-
-  // Strip Project Context from what we show LLM — it only sees updatable sections
   const projectMdForLLM = projectContextBlock
     ? projectMdContent.replace(projectContextBlock, '## Project Context\n[PRESERVED — DO NOT MODIFY]\n\n')
     : projectMdContent;
 
   const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
-You receive the current Project.md (with Project Context redacted) and meeting summaries.
-Update ONLY the sections below Project Context.
+Update ONLY the updatable sections. Project Context is preserved and will be re-injected.
 
 EXACT OUTPUT STRUCTURE:
 
@@ -1823,13 +1836,13 @@ EXACT OUTPUT STRUCTURE:
 ## Key Decisions
 - Decision — **Owner**
 
-Tags: #tag1 #tag2
-Links: [[Name1]] [[Name2]]
+**Tags:** #tag1 #tag2
+**Links:** [[ProjectFile]] [[MeetingSummary1]] [[MeetingSummary2]]
 
 RULES:
-1. Output the FULL file — keep [PRESERVED — DO NOT MODIFY] as a placeholder, it will be replaced.
-2. Tags: on its own line. Links: on its own line immediately after Tags.
-3. No [[wikilinks]] except on Links line.
+1. Output the FULL file — [PRESERVED — DO NOT MODIFY] placeholder stays as-is.
+2. **Tags:** on its own line. **Links:** on its own line immediately after.
+3. No [[wikilinks]] except on **Links:** line.
 4. No blank lines between bullets within a section.
 5. No meeting summary content in output.
 6. Consolidate action items — no duplicates.
@@ -1846,8 +1859,8 @@ ${allSummariesContent}
 
 ---
 
-Tags line: Tags: #active-project #${projectSlug} [add relevant tags from meetings, space-separated]
-Links line (immediately after Tags, its own line): Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
+**Tags:** line (its own line): **Tags:** #active-project #${projectSlug} [add relevant tags from meetings]
+**Links:** line (immediately after Tags, its own line): **Links:** [[${projectFileName.replace('.md', '')}]] [[${clientName || projectName}]]${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
 Output the full updated Project.md.`;
 
   try {
@@ -1859,10 +1872,10 @@ Output the full updated Project.md.`;
         projectContextBlock
       );
     }
-    // Ensure Tags and Links are always on separate lines (defensive fix)
+    // Ensure **Tags:** and **Links:** are always on separate lines
     updatedProjectMd = updatedProjectMd
-      .replace(/\bTags:([^\n]+)\s+Links:/g, 'Tags:$1\nLinks:')
-      .replace(/\bLinks:([^\n]+)\s+Tags:/g, 'Tags:\nLinks:$1');
+      .replace(/(\*\*Tags:\*\*[^\n]+)\s+(\*\*Links:\*\*)/g, '$1\n$2')
+      .replace(/(Tags:[^\n]+)\s+(Links:)/g, '$1\nLinks:');
     fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
   } catch (err: any) {
     console.error('[agent/generate-summary] Project.md merge failed:', err.message);
@@ -1876,11 +1889,11 @@ Output the full updated Project.md.`;
   });
 });
 // POST /api/agent/project-md
-// Body: { projectMdPath: string, content: string }
-// Saves user-edited Project.md content.
+// Body: { projectMdPath: string, content: string, finalProjectMdPath?: string }
+// Saves content. If finalProjectMdPath differs from projectMdPath, renames the file.
 app.post('/api/agent/project-md', authHeaderOnly, (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
-  const { projectMdPath, content } = req.body;
+  const { projectMdPath, content, finalProjectMdPath } = req.body;
 
   if (typeof projectMdPath !== 'string' || !projectMdPath.endsWith('.md'))
     return res.status(400).json({ error: 'projectMdPath must be a .md path' });
@@ -1890,11 +1903,21 @@ app.post('/api/agent/project-md', authHeaderOnly, (req: any, res) => {
   const absPath = safeJoin(vaultPath, projectMdPath);
   if (!absPath) return res.status(403).json({ error: 'Access denied' });
 
+  // If a final name is provided (ClientName-ProjectName.md), write to that path
+  const targetRelPath = typeof finalProjectMdPath === 'string' && finalProjectMdPath.endsWith('.md')
+    ? finalProjectMdPath : projectMdPath;
+  const targetAbsPath = safeJoin(vaultPath, targetRelPath);
+  if (!targetAbsPath) return res.status(403).json({ error: 'Access denied on target path' });
+
   try {
-    const dir = path.dirname(absPath);
+    const dir = path.dirname(targetAbsPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(absPath, content, 'utf-8');
-    res.json({ success: true });
+    fs.writeFileSync(targetAbsPath, content, 'utf-8');
+    // Delete old placeholder if it was renamed
+    if (targetAbsPath !== absPath && fs.existsSync(absPath)) {
+      fs.unlinkSync(absPath);
+    }
+    res.json({ success: true, savedPath: targetRelPath });
   } catch {
     res.status(500).json({ error: 'Failed to save Project.md' });
   }

@@ -150,22 +150,31 @@ export default function App() {
     const d = agentFlow.extractData;
     if (!d) return;
     const projectName = agentFlow.extractData?.projectName || projectForm.project || 'Project';
-    const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
     const clientName = projectForm.client || '';
+    const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
     const clientLine = agentFlow.stakeholders.filter(s => s.bucket === 'client')
       .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
     const internalLine = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
       .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
 
+    // Build final filename: ClientName-ProjectName.md
+    const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9 _-]/g, '').trim().replace(/\s+/g, '-');
+    const finalFileName = clientName
+      ? `${sanitize(clientName)}-${sanitize(projectName)}.md`
+      : `${sanitize(projectName)}.md`;
+    const mirrorRelDir = d.mirrorRelDir;
+    const finalProjectMdPath = `${mirrorRelDir}/${finalFileName}`;
+    const projectFileTitle = finalFileName.replace('.md', '');
+
     const content = `# ${projectName}
 
 ## Project Context
-Client: ${clientName}
-Project: ${projectForm.project || projectName}
+**Client:** ${clientName}
+**Project:** ${projectForm.project || projectName}
 **Client Stakeholders:** ${clientLine}
 **Internal Stakeholders:** ${internalLine}
-Project Summary: ${projectForm.summary}
+**Project Summary:** ${projectForm.summary}
 
 ## Current Status
 No current status available yet.
@@ -179,18 +188,21 @@ No current status available yet.
 ## Key Decisions
 (none yet)
 
-Tags: #active-project #${slug}
-Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
+**Tags:** #active-project #${slug}
+**Links:** [[${projectFileTitle}]]${clientName ? ` [[${clientName}]]` : ''}
 `;
-    // Save Project.md
-    await apiFetch('/api/agent/project-md', {
+    // Save Project.md with final ClientName-ProjectName.md filename
+    const saveRes = await apiFetch('/api/agent/project-md', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectMdPath: d.projectMdPath, content }),
+      body: JSON.stringify({ projectMdPath: d.projectMdPath, content, finalProjectMdPath }),
     });
+    const saveData = await saveRes.json();
+    // Update extractData with the new project file path for generate-summary
+    const updatedExtractData = { ...d, projectMdPath: saveData.savedPath || finalProjectMdPath };
 
     // Now generate summary with full context
-    await runGenerateSummary(d, agentFlow.nameAliases, agentFlow.stakeholders);
+    await runGenerateSummary(updatedExtractData, agentFlow.nameAliases, agentFlow.stakeholders);
   };
 
   // -------------------------------------------------------------------------
