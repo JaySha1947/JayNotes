@@ -1555,9 +1555,9 @@ app.post('/api/agent/extract', authHeaderOnly, async (req: any, res) => {
 
   const noteContent = fs.readFileSync(noteAbsPath, 'utf-8');
   const noteStat = fs.statSync(noteAbsPath);
-  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10);
+  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
   const noteBaseName = path.basename(notePath, '.md');
-  const summaryFileName = `${dateStr} — ${noteBaseName}.md`;
+  const summaryFileName = `${dateStr} - ${noteBaseName}.md`; // YYYYMMDD - SourceFileName
 
   // Derive paths without clientName first (we'll update after we know it)
   const { meetingSummaryRelDir, mirrorRelDir, projectName } =
@@ -1673,7 +1673,7 @@ app.post('/api/agent/generate-summary', authHeaderOnly, async (req: any, res) =>
 
   let noteContent = fs.readFileSync(noteAbsPath, 'utf-8');
   const noteStat = fs.statSync(noteAbsPath);
-  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10);
+  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
   const noteBaseName = path.basename(notePath, '.md');
 
   // Apply name aliases — replace unmapped/informal names with canonical names
@@ -1729,10 +1729,11 @@ Rules:
 - No [[wikilinks]] anywhere except the Links line at the bottom.
 - Use plain bold **Name** for people in Attendees and Action Items.
 - Use the project context to classify attendees as Client or Internal.
-- Attendees: Client on its own line, Internal on its own line — NEVER on the same line.
+- Attendees: Client on its own line, Internal on its own line - NEVER on the same line.
 - Open Questions go inside Action Items as the first sub-section ### Open Questions.
-- Tags: and Links: are plain lines at the bottom — NO ## heading, each on its OWN separate line.
+- Tags and Links are plain bold lines at the bottom - NO ## heading, each on its OWN separate line.
 - No blank lines between bullets inside a section.
+- NEVER use em dash (—). Use hyphen (-) instead everywhere.
 - Return only valid markdown. No preamble or explanation.`;
 
   const summarizeUserPrompt = `## Project Context (Project.md)
@@ -1748,25 +1749,25 @@ ${noteContent}
 
 Produce the meeting summary using EXACTLY this template. Blank line between EVERY field.
 
-# ${noteBaseName} — ${dateStr}
-**Source:** [[${noteBaseName}]]
-**Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
+# ${noteBaseName} - ${dateStr}
+Source: ${notePath}
+Meeting Type: (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
 
-**Client:** Name — Role, Name — Role
+**Client:** Name - Role, Name - Role
 
-**Internal:** Name — Role, Name — Role
+**Internal:** Name - Role, Name - Role
 
 ## Discussion Summary
 
 **Theme Name**
-- Key point or decision
+- Key point or decision (use "-" not "—" anywhere)
 
 ## Action Items
 
 ### Open Questions
-- Question — Name
+- Question (Name)
 
 ### Internal
 - [ ] **Name**: Task (Due: date or TBD)
@@ -1778,11 +1779,13 @@ Produce the meeting summary using EXACTLY this template. Blank line between EVER
 
 **Links:** [[${projectFileName.replace('.md', '')}]]${clientName ? ` [[${clientName}]]` : ''}
 
-(Blank line before Tags. Blank line before Links. They must be on separate lines.)`;
+IMPORTANT: Never use "—" (em dash) anywhere in the output. Use "-" (hyphen) instead.`;
 
   let summaryContent: string;
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
+    // Strip em dashes and replace with hyphen
+    summaryContent = summaryContent.replace(/—/g, '-');
     // Ensure blank line before **Tags:** and blank line before **Links:**
     summaryContent = summaryContent
       .replace(/([^\n])\n(\*\*Tags:\*\*)/g, '$1\n\n$2')
@@ -1889,7 +1892,10 @@ Output the updated Project.md.
       );
     }
 
-    // Ensure **Tags:** and **Links:** each have a blank line before them
+    // Strip em dashes from LLM output
+    updatedProjectMd = updatedProjectMd.replace(/—/g, '-');
+
+    // Ensure blank line before **Tags:** and blank line before **Links:**
     updatedProjectMd = updatedProjectMd
       .replace(/([^\n])\n(\*\*Tags:\*\*)/g, '$1\n\n$2')
       .replace(/([^\n])\n(\*\*Links:\*\*)/g, '$1\n\n$2')

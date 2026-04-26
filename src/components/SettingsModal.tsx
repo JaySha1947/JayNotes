@@ -15,7 +15,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     const saved = localStorage.getItem('jays_notes_accent');
     return (saved === '#7d4698' || saved === '#D85A30') ? '#00c882' : (saved || '#00c882');
   });
-  const [homeNote, setHomeNote] = React.useState(localStorage.getItem('jays_notes_home') || 'Welcome.md');
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = React.useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -39,10 +38,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     document.documentElement.style.setProperty('--interactive-accent', accentColor);
     localStorage.setItem('jays_notes_accent', accentColor);
   }, [accentColor]);
-
-  React.useEffect(() => {
-    localStorage.setItem('jays_notes_home', homeNote);
-  }, [homeNote]);
 
   if (!isOpen) return null;
 
@@ -152,18 +147,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
             {activeTab === 'files' && (
               <div className="space-y-6">
-                <div>
-                  <h3 className="text-text-normal font-medium mb-1">Home Note</h3>
-                  <p className="text-sm text-text-muted mb-3">The note that opens by default when you start the app.</p>
-                  <input 
-                    type="text" 
-                    value={homeNote}
-                    onChange={(e) => setHomeNote(e.target.value)}
-                    className="w-full bg-bg-secondary border border-border-color rounded px-3 py-2 outline-none focus:border-interactive-accent transition-colors text-sm"
-                    placeholder="e.g. Welcome.md"
-                  />
-                </div>
-
                 <div className="pt-6 border-t border-border-color">
                   <h3 className="text-text-normal font-medium mb-1">Confirm file deletion</h3>
                   <p className="text-sm text-text-muted mb-3">Show a confirmation prompt before deleting a file.</p>

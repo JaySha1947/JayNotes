@@ -26,13 +26,14 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('jays_notes_token'));
   const [role, setRole] = useState<string | null>(localStorage.getItem('jays_notes_role'));
   const [username, setUsername] = useState<string | null>(localStorage.getItem('jays_notes_username'));
-  
-  const defaultHome = localStorage.getItem('jays_notes_home') || 'Welcome.md';
-  // Restore the last-opened file; fall back to home if none saved
-  const lastFile = localStorage.getItem('jn-last-file') || defaultHome;
-  const lastFileTitle = lastFile.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
-  const [tabs, setTabs] = useState<TabData[]>([{ id: 'home', type: 'editor', title: lastFileTitle, path: lastFile }]);
-  const [activeTabId, setActiveTabId] = useState<string | null>('home');
+
+  // Restore last-opened file if one was saved; otherwise start blank
+  const lastFile = localStorage.getItem('jn-last-file');
+  const lastFileTitle = lastFile ? (lastFile.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home') : null;
+  const [tabs, setTabs] = useState<TabData[]>(
+    lastFile && lastFileTitle ? [{ id: 'home', type: 'editor', title: lastFileTitle, path: lastFile }] : []
+  );
+  const [activeTabId, setActiveTabId] = useState<string | null>(lastFile ? 'home' : null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -41,7 +42,7 @@ export default function App() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [leftSidebarTab, setLeftSidebarTab] = useState<'files' | 'search' | 'bookmarks' | 'templates'>('files');
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
-  const [history, setHistory] = useState<string[]>(['Welcome.md']);
+  const [history, setHistory] = useState<string[]>(lastFile ? [lastFile] : []);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [links, setLinks] = useState<{ backlinks: { path: string; name: string }[], forwardlinks: { path: string; name: string }[] }>({ backlinks: [], forwardlinks: [] });
   const [bookmarks, setBookmarks] = useState<string[]>(() => {
@@ -311,10 +312,9 @@ No current status available yet.
     setToken(newToken);
     setRole(newRole);
     setUsername(newUsername);
-    const h = localStorage.getItem('jays_notes_home') || 'Welcome.md';
-    const ht = h.split('/').pop()?.replace(/\.(md|canvas)$/, '') || 'Home';
-    setTabs([{ id: 'home', type: 'editor', title: ht, path: h }]);
-    setActiveTabId('home');
+    // Open blank home — no file loaded on first login
+    setTabs([]);
+    setActiveTabId(null);
   };
 
   const handleLogout = () => {
@@ -482,6 +482,22 @@ No current status available yet.
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const splitTab = tabs.find(t => t.id === splitTabId);
+
+  // Auto-scroll tab bar so active tab is always visible
+  useEffect(() => {
+    if (!activeTabId || !tabsRef.current) return;
+    const container = tabsRef.current;
+    const activeEl = container.querySelector(`[data-tabid="${activeTabId}"]`) as HTMLElement;
+    if (activeEl) {
+      const { offsetLeft, offsetWidth } = activeEl;
+      const { scrollLeft, clientWidth } = container;
+      if (offsetLeft < scrollLeft) {
+        container.scrollTo({ left: offsetLeft - 8, behavior: 'smooth' });
+      } else if (offsetLeft + offsetWidth > scrollLeft + clientWidth) {
+        container.scrollTo({ left: offsetLeft + offsetWidth - clientWidth + 8, behavior: 'smooth' });
+      }
+    }
+  }, [activeTabId]);
 
   useEffect(() => {
     localStorage.setItem('jays_notes_bookmarks', JSON.stringify(bookmarks));
@@ -1191,6 +1207,16 @@ No current status available yet.
 
       {/* Ribbon (Far Left) */}
       <div className="w-12 flex-shrink-0 bg-bg-secondary border-r border-border-color flex flex-col items-center py-4 space-y-6 z-10">
+        {/* Show expand button when sidebar is collapsed */}
+        {!isLeftSidebarOpen && (
+          <button
+            className="text-text-muted hover:text-interactive-accent transition-colors"
+            onClick={() => setIsLeftSidebarOpen(true)}
+            title="Expand sidebar"
+          >
+            <ChevronRight size={20} />
+          </button>
+        )}
         <button 
           className="text-text-muted hover:text-text-normal transition-colors"
           onClick={() => {
@@ -1324,11 +1350,15 @@ No current status available yet.
           <Settings size={20} />
         </button>
         <button 
-          className={`hover:text-text-normal transition-colors ${isRightSidebarOpen ? 'text-interactive-accent' : 'text-text-muted'}`}
-          onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-          title="Toggle Right Sidebar"
+          className={`hover:text-text-normal transition-colors ${(isRightSidebarOpen || isLeftSidebarOpen) ? 'text-interactive-accent' : 'text-text-muted'}`}
+          onClick={() => {
+            const anyOpen = isRightSidebarOpen || isLeftSidebarOpen;
+            setIsRightSidebarOpen(!anyOpen);
+            setIsLeftSidebarOpen(!anyOpen);
+          }}
+          title={isRightSidebarOpen || isLeftSidebarOpen ? 'Hide sidebars' : 'Show sidebars'}
         >
-          <PanelRight size={20} />
+          <Layers size={20} />
         </button>
         <button 
           className="text-text-muted hover:text-error transition-colors"
@@ -1545,6 +1575,16 @@ No current status available yet.
                     </div>
                   </div>
                 )}
+              {/* Collapse button at bottom of sidebar */}
+              <div className="flex-shrink-0 border-t border-border-color px-2 py-2">
+                <button
+                  onClick={() => setIsLeftSidebarOpen(false)}
+                  className="w-full flex items-center justify-end gap-1 text-xs text-text-muted hover:text-text-normal transition-colors px-1"
+                  title="Collapse sidebar"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
               </Panel>
 
               <PanelResizeHandle className="w-2 relative flex items-center justify-center cursor-col-resize group flex-shrink-0 z-10">
@@ -1557,16 +1597,6 @@ No current status available yet.
           <Panel id="workspace" order={2} defaultSize={65} minSize={20} className="bg-bg-primary flex flex-col relative min-w-0 overflow-hidden">
             {/* Tabs */}
             <div className="h-10 bg-bg-secondary border-b border-border-color flex items-end px-2 pt-2 flex-shrink-0 relative">
-              <div className="flex items-center gap-1 mr-2 mb-1 text-text-muted flex-shrink-0">
-                <button 
-                  className={`p-1 rounded hover:bg-bg-primary ${isLeftSidebarOpen ? 'text-interactive-accent' : ''}`}
-                  onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-                  title="Toggle Left Sidebar"
-                >
-                  <ChevronLeft size={16} className={`transition-transform ${isLeftSidebarOpen ? '' : 'rotate-180'}`} />
-                </button>
-              </div>
-              
               <button onClick={() => scrollTabs('left')} className="p-1 mb-1 text-text-muted hover:text-text-normal hover:bg-bg-primary rounded flex-shrink-0 z-10 bg-bg-secondary shadow-[2px_0_4px_rgba(0,0,0,0.1)]">
                 <ChevronLeft size={16} />
               </button>
@@ -1575,6 +1605,7 @@ No current status available yet.
                 {tabs.map(tab => (
                   <div 
                     key={tab.id}
+                    data-tabid={tab.id}
                     onClick={() => setActiveTabId(tab.id)}
                     className={`group flex items-center gap-2 px-3 py-1.5 text-sm rounded-t-md min-w-[120px] max-w-[200px] cursor-pointer border-t border-l border-r flex-shrink-0 ${
                       activeTabId === tab.id 
