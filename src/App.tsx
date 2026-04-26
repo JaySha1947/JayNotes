@@ -64,7 +64,7 @@ export default function App() {
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Agent Space — full workflow state
-  type AgentStakeholder = { name: string; role: string; org: string; bucket: 'client' | 'internal' | 'unknown' };
+  type AgentStakeholder = { name: string; role: string; org: string; bucket: 'client' | 'internal' | 'unknown'; mappedTo?: string };
   type AgentNameMapping = { informal: string; canonical: string };
   const [agentFlow, setAgentFlow] = useState<{
     // which modal/overlay is showing
@@ -151,51 +151,36 @@ export default function App() {
     if (!d) return;
     const projectName = agentFlow.extractData?.projectName || projectForm.project || 'Project';
     const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const clientName = projectForm.client || '';
 
-    // Build classified stakeholder lists — one line each
-    const clientStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'client')
+    const clientLine = agentFlow.stakeholders.filter(s => s.bucket === 'client')
       .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
-    const internalStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
+    const internalLine = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
       .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
 
     const content = `# ${projectName}
 
-## Project Setup / Context
-<!-- USER:START project_context -->
-Client: ${projectForm.client}
-Project: ${projectForm.project}
-Stakeholders:
-  Client: ${clientStakeholders || '(none classified yet)'}
-  Internal: ${internalStakeholders || '(none classified yet)'}
+## Project Context
+Client: ${clientName}
+Project: ${projectForm.project || projectName}
+**Client Stakeholders:** ${clientLine}
+**Internal Stakeholders:** ${internalLine}
 Project Summary: ${projectForm.summary}
-<!-- USER:END project_context -->
 
-## Current Status - Current/In-progress/Stopped
-<!-- AI:START current_status -->
+## Current Status
 No current status available yet.
-<!-- AI:END current_status -->
 
-## Active Action Items - Checklist
-<!-- AI:START active_actions -->
-<!-- AI:END active_actions -->
+## Active Action Items
+(none yet)
 
 ## Completed Action Items
-<!-- AI:START completed_actions -->
-<!-- AI:END completed_actions -->
+(none yet)
 
-## Key Decisions - Decisions made, Owner
-<!-- AI:START decisions -->
-<!-- AI:END decisions -->
+## Key Decisions
+(none yet)
 
-## Tags
-<!-- AI:START tags -->
-#active-project #${slug}
-<!-- AI:END tags -->
-
-## Links
-<!-- AI:START links -->
-[[Project]] [[${projectName}]] [[Meeting Notes Summaries]]
-<!-- AI:END links -->
+Tags: #active-project #${slug}
+Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
 `;
     // Save Project.md
     await apiFetch('/api/agent/project-md', {
@@ -1005,36 +990,67 @@ No current status available yet.
       {/* ── Returning project: new stakeholders detected ── */}
       {agentFlow.step === 'new-stakeholders' && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-lg mx-4" style={{ maxHeight: '80vh' }}>
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-2xl mx-4" style={{ maxHeight: '85vh' }}>
             <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
               <span style={{ color: 'var(--interactive-accent)', fontSize: 18 }}>✦</span>
               <div>
                 <h2 className="font-semibold text-text-normal text-sm">New People Detected</h2>
-                <p className="text-xs text-text-muted">These names weren't in Project.md. Classify them or leave as Needs Classification.</p>
+                <p className="text-xs text-text-muted">Classify each person, or map them to an existing stakeholder in this project.</p>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0">
-              <div className="grid grid-cols-3 gap-3">
-                {(['client', 'internal', 'unknown'] as const).map(bucket => (
-                  <div key={bucket} className="bg-bg-secondary rounded-lg p-3 min-h-[60px]"
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={e => {
-                      e.preventDefault();
-                      const name = e.dataTransfer.getData('text/plain');
-                      setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(s => s.name === name ? { ...s, bucket } : s) }));
-                    }}>
-                    <p className="text-xs font-semibold mb-2 capitalize" style={{ color: bucket === 'client' ? 'var(--interactive-accent)' : bucket === 'internal' ? '#60a5fa' : '#9ca3af' }}>
-                      {bucket === 'unknown' ? 'Needs Classification' : bucket === 'client' ? 'Client' : 'Internal'}
-                    </p>
-                    {agentFlow.stakeholders.filter(s => s.bucket === bucket).map(s => (
-                      <div key={s.name} draggable onDragStart={e => e.dataTransfer.setData('text/plain', s.name)}
-                        className="bg-bg-primary border border-border-color rounded px-2 py-1 mb-1 text-xs text-text-normal cursor-grab select-none">
-                        {s.name}{s.role ? ` — ${s.role}` : ''}
-                      </div>
-                    ))}
+            <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0 space-y-3">
+              {agentFlow.stakeholders.map(s => (
+                <div key={s.name} className="flex items-center gap-3 bg-bg-secondary rounded-lg px-3 py-2">
+                  {/* Name chip */}
+                  <div className="flex-shrink-0 min-w-[160px]">
+                    <p className="text-sm font-medium text-text-normal">{s.name}</p>
+                    {s.role && <p className="text-xs text-text-muted">{s.role}</p>}
                   </div>
-                ))}
-              </div>
+                  {/* Classification buttons */}
+                  <div className="flex gap-1.5 flex-wrap flex-1">
+                    {(['client', 'internal', 'unknown'] as const).map(bucket => (
+                      <button key={bucket}
+                        onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, bucket, mappedTo: undefined } : st) }))}
+                        className="px-2.5 py-1 text-xs rounded-md border transition-colors"
+                        style={{
+                          borderColor: s.bucket === bucket && !s.mappedTo ? 'var(--interactive-accent)' : 'var(--border-color)',
+                          background: s.bucket === bucket && !s.mappedTo ? 'var(--interactive-accent)' : 'transparent',
+                          color: s.bucket === bucket && !s.mappedTo ? 'white' : 'var(--text-muted)',
+                        }}>
+                        {bucket === 'unknown' ? 'Unclassified' : bucket === 'client' ? 'Client' : 'Internal'}
+                      </button>
+                    ))}
+                    {/* Map to existing */}
+                    <select
+                      value={s.mappedTo || ''}
+                      onChange={e => {
+                        const canonical = e.target.value;
+                        if (!canonical) {
+                          setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, mappedTo: undefined } : st) }));
+                          return;
+                        }
+                        // Find the bucket of the canonical person from knownStakeholders
+                        setAgentFlow(f => ({
+                          ...f,
+                          nameAliases: { ...f.nameAliases, [s.name]: canonical },
+                          stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, mappedTo: canonical, bucket: 'client' } : st),
+                        }));
+                      }}
+                      className="px-2 py-1 text-xs rounded-md border border-border-color bg-bg-primary text-text-muted outline-none focus:border-interactive-accent transition-colors">
+                      <option value="">↔ Map to existing…</option>
+                      {(agentFlow.extractData?.knownStakeholders || []).map((known: string) => (
+                        <option key={known} value={known}>{known}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {/* Show mapped indicator */}
+                  {s.mappedTo && (
+                    <span className="text-xs flex-shrink-0" style={{ color: 'var(--interactive-accent)' }}>
+                      → {s.mappedTo}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
             <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-color flex-shrink-0">
               <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))}
