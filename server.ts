@@ -1618,7 +1618,21 @@ Do not add sections. Do not rename sections. Do not pad thin content.
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
   } catch (err: any) {
-    console.error('[agent/summarize] OpenRouter error:', err.message);
+    console.error('[agent/summarize] OpenRouter summarize error:', err.message);
+    // On first time: skeleton is already written — return it so modal shows
+    // On returning: tell the user LLM failed but don't lose their project
+    if (isFirstTime) {
+      return res.json({
+        success: true,
+        summaryPath: null,
+        projectMdPath: projectMdRelPath,
+        isFirstTime: true,
+        projectMdContent: buildSkeletonProjectMd(projectName),
+        mirrorRelDir,
+        projectName,
+        warning: `Project.md skeleton created but LLM summarization failed: ${err.message}`,
+      });
+    }
     return res.status(502).json({ error: `LLM call failed: ${err.message}` });
   }
 

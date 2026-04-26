@@ -127,7 +127,9 @@ export default function App() {
         setAgentSpaceStatus({
           show: true,
           state: 'first-time',
-          message: `New project "${data.projectName}" — Project.md skeleton created. Fill in description, stakeholders, and context, then save. The summary has already been stored.`,
+          message: data.warning
+            ? `New project "${data.projectName}" — Project.md created. Fill in the context fields then save. (LLM note: ${data.warning})`
+            : `New project "${data.projectName}" — Project.md skeleton created. Fill in the context fields then save.`,
           projectMdPath: data.projectMdPath,
           projectMdContent: data.projectMdContent,
           summaryPath: data.summaryPath,
