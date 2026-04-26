@@ -28,6 +28,10 @@ services:
       # Optional
       MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-52428800}
       ENABLE_IFRAME_PROXY: ${ENABLE_IFRAME_PROXY:-true}
+      # Agent Space — OpenRouter LLM
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-5.5}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
 
     # Drop Linux capabilities and run read-only except for /data and /tmp.
     read_only: true

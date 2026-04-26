@@ -14,14 +14,7 @@ import { promises as dnsPromises } from 'dns';
 import net from 'net';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-// ESM-compatible __dirname (package.json has "type":"module")
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// Try project root (.env sits above dist-server/), then cwd as fallback
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config({ path: path.resolve(__dirname, '.env') });
-dotenv.config();
+dotenv.config(); // picks up .env in dev; in Docker, compose injects env vars directly
 
 // =============================================================================
 // Configuration & Startup Checks
@@ -1465,53 +1458,63 @@ function deriveMirrorPaths(notePath: string, agentSpaceRoot: string) {
 
 /** Skeleton Project.md written on first encounter of a project. */
 function buildSkeletonProjectMd(projectName: string): string {
-  return `---
-project_name: "${projectName}"
-project_description: ""
-stakeholders:
-  client: []
-  internal: []
----
+  return `# ${projectName}
 
-# ${projectName}
+## Current Status - Current/In-progress/Stopped
+<!-- AI:START current_status -->
+No current status available yet.
+<!-- AI:END current_status -->
 
 ## Project Description
-<!-- Describe the project goals, scope, and context here. -->
+<!-- AI:START project_description -->
+<!-- AI:END project_description -->
 
 ## Stakeholders
+<!-- AI:START stakeholders -->
 ### Client
 <!-- e.g. - Jane Doe (Sponsor) -->
 
 ### Internal
 <!-- e.g. - John Smith (Engagement Lead) -->
+<!-- AI:END stakeholders -->
+
+## Unknown Stakeholders / Needs Classification
+<!-- AI:START unknown_stakeholders -->
+<!-- AI:END unknown_stakeholders -->
 
 ## Discussion Items
-<!-- Running log of topics discussed across meetings. -->
+<!-- AI:START discussion_items -->
+<!-- AI:END discussion_items -->
 
-## Key Decisions
-<!-- Decisions that have been made and are in effect. -->
+## Key Decisions - Decisions made, Owner
+<!-- AI:START decisions -->
+<!-- AI:END decisions -->
 
 ## Open Questions
-<!-- Questions that are still unresolved. -->
+<!-- AI:START open_questions -->
+<!-- AI:END open_questions -->
 
 ## Next Steps
-<!-- The most current forward-looking actions. -->
+<!-- AI:START next_steps -->
+<!-- AI:END next_steps -->
 
-## Active Action Items
-### Internal
-<!-- - [ ] Owner: Task description (Due: date) -->
-
-### Client
-<!-- - [ ] Owner: Task description (Due: date) -->
+## Active Action Items - Checklist
+<!-- AI:START active_actions -->
+<!-- AI:END active_actions -->
 
 ## Completed Action Items
-<!-- - [x] Owner: Task description (Completed: date) -->
+<!-- AI:START completed_actions -->
+<!-- AI:END completed_actions -->
 
-## Important Tags
-<!-- #tag1 #tag2 -->
+## Tags
+<!-- AI:START tags -->
+#active-project #${projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')} 
+<!-- AI:END tags -->
 
-## Important Links
-<!-- [[Note Title]] or https://... -->
+## Links
+<!-- AI:START links -->
+[[Project]] [[${projectName}]] [[Meeting Notes Summaries]]
+<!-- AI:END links -->
 `;
 }
 
@@ -1632,13 +1635,18 @@ Forward-looking intent expressed in the meeting — what happens next, who drive
   if (!isFirstTime) {
     const mergeSystemPrompt = `You are maintaining a living project knowledge file (Project.md) for a consulting engagement.
 You will receive the CURRENT Project.md and a fresh meeting summary.
-Your job is to intelligently merge the new information into Project.md:
-- Update fields that have changed (e.g. next steps, open questions, action items)
-- Add new stakeholders, decisions, or discussion items — never delete existing ones unless explicitly superseded
-- Move completed action items to "Completed Action Items"
-- Keep the exact same Markdown structure and headings as the input Project.md
-- Do NOT compress or lose historical detail — add to it, don't replace it
-Output ONLY the updated Project.md content, no preamble.`;
+Your job is to intelligently merge the new information into Project.md.
+
+CRITICAL RULES:
+- The file uses <!-- AI:START section_name --> and <!-- AI:END section_name --> markers to delimit each section.
+- You MUST preserve ALL markers exactly as-is — never remove or rename them.
+- Only update content BETWEEN the markers — never touch the markers themselves or the headings.
+- Update fields that have changed (next steps, open questions, action items, status).
+- Add new stakeholders, decisions, discussion items — never delete existing ones unless explicitly superseded.
+- Move completed action items from active_actions to completed_actions.
+- Add new tags inside the tags block if relevant — keep existing tags.
+- Do NOT compress or lose historical detail — add to it, don't replace it.
+- Output ONLY the complete updated Project.md, no preamble or explanation.`;
 
     const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
@@ -1650,7 +1658,7 @@ ${summaryContent}
 
 ---
 
-Produce the updated Project.md. Preserve all existing content. Intelligently integrate new information. Keep the same structure.`;
+Produce the full updated Project.md. Preserve every <!-- AI:START --> and <!-- AI:END --> marker exactly. Only add/update content between the markers.`;
 
     try {
       updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
