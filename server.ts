@@ -1566,8 +1566,9 @@ Rules:
 - If something is unclear, mark it as "unclear".
 - Summary length must be proportional to the input — a short note gets a short summary. Never pad.
 - If a section has nothing to put in it, write "None." Do not invent content to fill it.
-- Use [[wikilinks]] for people, clients, projects, deliverables, and recurring concepts.
-- Use #tags for classification and search.
+- Use [[wikilinks]] ONLY in: Attendees names, Action Item owners, Links section. Nowhere else.
+- Do NOT use [[wikilinks]] in Discussion Summary or Open Questions — use plain bold for topics only.
+- Use #tags only in the Tags section.
 - Use the project context stakeholder list to classify attendees. Anyone not listed goes under Unknown.
 - Return only valid markdown. No preamble or explanation.`;
 
@@ -1594,12 +1595,20 @@ Do not add sections. Do not rename sections. Do not pad thin content.
 **Unknown:** Name — context clue (omit line if none)
 
 ## Discussion Summary
-(One bullet per topic. Fold decisions into the relevant topic bullet. No sub-bullets.)
-- **[[Topic]]:** key point and any decision made
+Group bullets by THEME. Each theme is a bold heading on its own line, followed by 1-3 plain bullet points.
+Do NOT use [[wikilinks]] here. Use plain bold for theme names only.
+Do NOT write one giant flat list — group related points together.
+
+**Theme Name**
+- Key point or decision (plain text, no links)
+- Another point if needed
+
+**Next Theme**
+- Key point
 
 ## Open Questions
-(Only real unresolved questions from the note. Omit section if none.)
-- Question — [[Name who raised it]]
+(Only real unresolved questions from the note. Omit section entirely if none.)
+- Question — Name who raised it (no wikilinks)
 
 ## Action Items
 ### Internal

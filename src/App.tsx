@@ -71,7 +71,17 @@ export default function App() {
     projectMdPath?: string;
     projectMdContent?: string;
     summaryPath?: string;
+    projectName?: string;
   }>({ show: false, state: 'loading', message: '' });
+
+  // Structured form fields for first-time project setup
+  const [projectForm, setProjectForm] = useState({
+    client: '',
+    project: '',
+    stakeholdersClient: '',
+    stakeholdersInternal: '',
+    summary: '',
+  });
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,7 +133,8 @@ export default function App() {
       }
 
       if (data.isFirstTime) {
-        // First time for this project — prompt user to review Project.md skeleton
+        // Reset form fields
+        setProjectForm({ client: '', project: data.projectName || '', stakeholdersClient: '', stakeholdersInternal: '', summary: '' });
         setAgentSpaceStatus({
           show: true,
           state: 'first-time',
@@ -133,6 +144,7 @@ export default function App() {
           projectMdPath: data.projectMdPath,
           projectMdContent: data.projectMdContent,
           summaryPath: data.summaryPath,
+          projectName: data.projectName,
         });
       } else {
         setAgentSpaceStatus({
@@ -151,8 +163,56 @@ export default function App() {
     }
   };
 
-  const handleAgentSpaceProjectMdSave = async (content: string) => {
+  const handleAgentSpaceProjectMdSave = async (formData?: typeof projectForm) => {
     if (!agentSpaceStatus.projectMdPath) return;
+    const f = formData || projectForm;
+    const projectName = agentSpaceStatus.projectName || 'Project';
+    const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Build clean Project.md from form fields, injecting user values into USER section
+    const content = `# ${projectName}
+
+## Project Setup / Context
+<!-- USER:START project_context -->
+Client: ${f.client}
+Project: ${f.project}
+Stakeholders:
+  - Client: ${f.stakeholdersClient}
+  - Internal: ${f.stakeholdersInternal}
+Project Summary: ${f.summary}
+<!-- USER:END project_context -->
+
+## Current Status - Current/In-progress/Stopped
+<!-- AI:START current_status -->
+No current status available yet.
+<!-- AI:END current_status -->
+
+## Active Action Items - Checklist
+<!-- AI:START active_actions -->
+<!-- AI:END active_actions -->
+
+## Completed Action Items
+<!-- AI:START completed_actions -->
+<!-- AI:END completed_actions -->
+
+## Key Decisions - Decisions made, Owner
+<!-- AI:START decisions -->
+<!-- AI:END decisions -->
+
+## Unknown Stakeholders / Needs Classification
+<!-- AI:START unknown_stakeholders -->
+<!-- AI:END unknown_stakeholders -->
+
+## Tags
+<!-- AI:START tags -->
+#active-project #${slug}
+<!-- AI:END tags -->
+
+## Links
+<!-- AI:START links -->
+[[Project]] [[${projectName}]] [[Meeting Notes Summaries]]
+<!-- AI:END links -->
+`;
     try {
       await apiFetch('/api/agent/project-md', {
         method: 'POST',
@@ -162,7 +222,6 @@ export default function App() {
       setRefreshTrigger(t => t + 1);
       setAgentSpaceStatus({ show: false, state: 'success', message: '' });
     } catch {
-      // silently close — file was already written by server at skeleton stage
       setAgentSpaceStatus({ show: false, state: 'success', message: '' });
     }
   };
@@ -786,47 +845,64 @@ export default function App() {
         </div>
       )}
 
-      {/* First-time Project.md review modal */}
+      {/* First-time Project.md setup — clean form, no raw markdown */}
       {agentSpaceStatus.show && agentSpaceStatus.state === 'first-time' && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-2xl mx-4" style={{ maxHeight: '85vh' }}>
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-lg mx-4" style={{ maxHeight: '90vh' }}>
             {/* Header */}
             <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
-              <span style={{ color: 'var(--interactive-accent)', fontSize: 20 }}>✦</span>
+              <span style={{ color: 'var(--interactive-accent)', fontSize: 18 }}>✦</span>
               <div className="flex-1 min-w-0">
-                <h2 className="font-semibold text-text-normal">New Project Detected</h2>
-                <p className="text-xs text-text-muted mt-0.5">{agentSpaceStatus.message}</p>
+                <h2 className="font-semibold text-text-normal text-sm">New Project — Set Up Context</h2>
+                <p className="text-xs text-text-muted mt-0.5">{agentSpaceStatus.projectName} · This context helps agents answer questions accurately.</p>
               </div>
             </div>
-            {/* Editor */}
-            <div className="flex-1 overflow-y-auto p-4 min-h-0">
-              <p className="text-xs text-text-muted mb-2">
-                Edit <code className="bg-bg-secondary px-1 rounded">{agentSpaceStatus.projectMdPath}</code> — fill in project description, stakeholders, and context. This becomes the persistent memory agents use to answer your questions.
-              </p>
-              <textarea
-                className="w-full bg-bg-secondary border border-border-color rounded-lg p-3 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none font-mono"
-                style={{ minHeight: 380 }}
-                defaultValue={agentSpaceStatus.projectMdContent || ''}
-                onChange={e => setAgentSpaceStatus(s => ({ ...s, projectMdContent: e.target.value }))}
-              />
+            {/* Form */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 min-h-0">
+              {[
+                { label: 'Client', key: 'client', placeholder: 'e.g. NovaCure', hint: 'Client company name' },
+                { label: 'Project', key: 'project', placeholder: 'e.g. AI Insights Transformation', hint: 'Project or engagement name' },
+                { label: 'Client Stakeholders', key: 'stakeholdersClient', placeholder: 'e.g. Sarah Mitchell (Sponsor), Priya Rao (Insights Lead)', hint: 'Name — Role, one per line or comma separated' },
+                { label: 'Internal Stakeholders', key: 'stakeholdersInternal', placeholder: 'e.g. Michael Grant (Engagement Lead), Anika Mehta', hint: 'Name — Role, one per line or comma separated' },
+              ].map(({ label, key, placeholder, hint }) => (
+                <div key={key}>
+                  <label className="block text-xs font-semibold text-text-normal mb-1">{label}</label>
+                  <p className="text-xs text-text-muted mb-1.5">{hint}</p>
+                  <input
+                    type="text"
+                    placeholder={placeholder}
+                    value={projectForm[key as keyof typeof projectForm]}
+                    onChange={e => setProjectForm(f => ({ ...f, [key]: e.target.value }))}
+                    className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-xs font-semibold text-text-normal mb-1">Project Summary</label>
+                <p className="text-xs text-text-muted mb-1.5">What is this project about? What problem does it solve?</p>
+                <textarea
+                  placeholder="e.g. Phase one pilot to improve NovaCure's access to primary research insights using AI, focused on Cardiomab brand."
+                  value={projectForm.summary}
+                  onChange={e => setProjectForm(f => ({ ...f, summary: e.target.value }))}
+                  rows={3}
+                  className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none"
+                />
+              </div>
             </div>
             {/* Footer */}
             <div className="flex items-center justify-between px-6 py-4 border-t border-border-color flex-shrink-0 gap-3">
-              <p className="text-xs text-text-muted">
-                Summary was saved to <code className="bg-bg-secondary px-1 rounded">{agentSpaceStatus.summaryPath}</code>
+              <p className="text-xs text-text-muted truncate">
+                {agentSpaceStatus.summaryPath ? `Summary saved · ${agentSpaceStatus.summaryPath}` : 'You can update this later in the Project.md file.'}
               </p>
               <div className="flex gap-2 flex-shrink-0">
                 <button
-                  onClick={() => {
-                    setAgentSpaceStatus(s => ({ ...s, show: false }));
-                    setRefreshTrigger(t => t + 1);
-                  }}
+                  onClick={() => { setAgentSpaceStatus(s => ({ ...s, show: false })); setRefreshTrigger(t => t + 1); }}
                   className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal hover:bg-bg-secondary transition-colors"
                 >
-                  Skip for now
+                  Skip
                 </button>
                 <button
-                  onClick={() => handleAgentSpaceProjectMdSave(agentSpaceStatus.projectMdContent || '')}
+                  onClick={() => handleAgentSpaceProjectMdSave()}
                   className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
                   style={{ background: 'var(--interactive-accent)' }}
                 >
