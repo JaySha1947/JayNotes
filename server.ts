@@ -1568,56 +1568,59 @@ app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
   const projectMdContent = fs.readFileSync(projectMdAbsPath, 'utf-8');
 
   // --- Build summarization prompt ---
-  const summarizeSystemPrompt = `You are an expert meeting analyst and knowledge engineer embedded in a consulting firm's note-taking system.
-Your job is to produce a COMPLETE, LOSSLESS structured summary of a meeting note.
-The summary will be read by AI agents to answer questions — so include EVERY detail: numbers, names, dates, opinions, concerns, commitments, and context.
-Do not compress or omit anything material. When in doubt, include it.
+  // On first time, project context is just the name — skeleton is empty placeholders
+  const projectContext = isFirstTime
+    ? `Project: ${projectName}`
+    : `Project context from Project.md:\n${projectMdContent}`;
+  const summarizeSystemPrompt = `You are a sharp meeting analyst for a consulting firm. Your job is to produce a CONCISE, well-structured meeting summary that an AI agent can use to answer questions later.
 
-Output ONLY the Markdown document below — no preamble, no explanation.`;
+Rules:
+- Be brief but complete. Use bullet points. No paragraphs of prose.
+- Capture NAMES, DECISIONS, ACTION ITEMS, DATES, and KEY FACTS — these are what agents need.
+- For discussion items: one bullet per topic with the key point only. No verbatim transcription.
+- For quotes: only include a quote if it is uniquely important (e.g. a non-negotiable requirement stated by a named person).
+- Skip pleasantries, filler, and anything that adds no information.
+- Output ONLY the Markdown document. No preamble.`;
 
-  const summarizeUserPrompt = `## Project Context (Project.md)
-${projectMdContent}
+  const summarizeUserPrompt = `${projectContext}
 
----
-
-## Meeting Note to Summarize
-File: ${notePath}
-Last modified: ${noteModDate.toUTCString()}
+Meeting file: ${notePath}
+Date: ${dateStr}
 
 ${noteContent}
 
 ---
 
-Produce the structured meeting summary as a Markdown document with EXACTLY these sections.
-Under each section, be exhaustive — capture every detail from the note.
+Produce a structured summary using EXACTLY this format. Be concise — every bullet should earn its place.
 
-# Meeting Summary: ${noteBaseName}
-**Date:** ${dateStr}
-**Source note:** ${notePath}
+# ${noteBaseName} — ${dateStr}
+**Source:** ${notePath}
 
 ## Attendees
-List every person mentioned (name, role/title, company if known).
+- Name — Role, Company
 
-## Context & Background
-What project/situation does this meeting relate to? What was the state of affairs going into this meeting?
+## Key Context
+1-3 bullets on WHY this meeting happened and what the starting situation was.
 
-## Discussion Items
-For EACH topic discussed: a sub-heading, a complete account of what was said, who said it (if attributable), and any nuance or disagreement.
+## Decisions Made
+- [Decision] — Owner/who decided — any conditions
 
-## Key Decisions
-Every decision made — what was decided, who decided it, any conditions or caveats.
+## Discussion Highlights
+One bullet per major topic. Format: **Topic:** key point or outcome.
 
 ## Action Items
-Every task committed to — owner, description, due date (if stated). Mark as Internal or Client-side.
+### Internal
+- [ ] Owner: Task (Due: date or "TBD")
 
-## Open Questions & Risks
-Unresolved questions, concerns raised, risks flagged — even if only mentioned briefly.
+### Client
+- [ ] Owner: Task (Due: date or "TBD")
 
-## Verbatim Highlights
-Any exact quotes, specific numbers, metrics, thresholds, or named artefacts (tools, documents, systems) that appeared in the note. These are especially important for agents.
+## Open Questions
+- Question — who raised it
 
-## Next Steps
-Forward-looking intent expressed in the meeting — what happens next, who drives it.`;
+## Key Quotes / Non-Negotiables
+Only include if a named person stated something critical as a hard requirement.
+- "Quote" — Name`;
 
   let summaryContent: string;
   try {
@@ -1633,32 +1636,37 @@ Forward-looking intent expressed in the meeting — what happens next, who drive
   // --- Update Project.md (skip on first time — user reviews skeleton first) ---
   let updatedProjectMd: string | null = null;
   if (!isFirstTime) {
-    const mergeSystemPrompt = `You are maintaining a living project knowledge file (Project.md) for a consulting engagement.
-You will receive the CURRENT Project.md and a fresh meeting summary.
-Your job is to intelligently merge the new information into Project.md.
+    const mergeSystemPrompt = `You maintain a concise living Project.md for a consulting engagement.
+You will receive the current Project.md and a new meeting summary.
+Merge the new info in — concisely. This file is a STATUS SNAPSHOT, not an archive.
 
-CRITICAL RULES:
-- The file uses <!-- AI:START section_name --> and <!-- AI:END section_name --> markers to delimit each section.
-- You MUST preserve ALL markers exactly as-is — never remove or rename them.
-- Only update content BETWEEN the markers — never touch the markers themselves or the headings.
-- Update fields that have changed (next steps, open questions, action items, status).
-- Add new stakeholders, decisions, discussion items — never delete existing ones unless explicitly superseded.
-- Move completed action items from active_actions to completed_actions.
-- Add new tags inside the tags block if relevant — keep existing tags.
-- Do NOT compress or lose historical detail — add to it, don't replace it.
-- Output ONLY the complete updated Project.md, no preamble or explanation.`;
+STRICT RULES:
+1. Output the COMPLETE Project.md with ALL <!-- AI:START --> and <!-- AI:END --> markers preserved exactly.
+2. Only write content BETWEEN the markers. Never touch markers or headings.
+3. Keep each section SHORT — bullet points only, no prose paragraphs.
+4. current_status: update to reflect latest state (1-2 sentences max).
+5. active_actions: add new uncompleted items as "- [ ] Owner: Task (Due: date)". Move done items to completed_actions.
+6. completed_actions: add "- [x] Owner: Task (Completed: date)" for anything finished.
+7. decisions: add new decisions as "- Decision — Owner — date". Keep all existing ones.
+8. unknown_stakeholders: add anyone whose role is unclear.
+9. tags: add relevant new tags only. Keep existing.
+10. links: keep existing. Add new [[links]] only if clearly relevant.
+11. discussion_items, open_questions, next_steps: bullet-point updates only — replace stale items, add new ones.
+12. stakeholders: add new people with role and company. Never remove.
+13. DO NOT copy the full meeting summary into Project.md. Extract only what changed or is new.
+Output ONLY the updated Project.md. No explanation.`;
 
     const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
 
 ---
 
-## New Meeting Summary (just added)
+## New Meeting Summary
 ${summaryContent}
 
 ---
 
-Produce the full updated Project.md. Preserve every <!-- AI:START --> and <!-- AI:END --> marker exactly. Only add/update content between the markers.`;
+Update the Project.md. Stay concise. Preserve all markers. Bullet points only inside sections.`;
 
     try {
       updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);

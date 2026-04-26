@@ -123,11 +123,11 @@ export default function App() {
       }
 
       if (data.isFirstTime) {
-        // First time for this project — prompt user to review Project.md
+        // First time for this project — prompt user to review Project.md skeleton
         setAgentSpaceStatus({
           show: true,
           state: 'first-time',
-          message: `New project detected: "${data.projectName}". A Project.md skeleton has been created. Please review and fill it in before closing.`,
+          message: `New project "${data.projectName}" — Project.md skeleton created. Fill in description, stakeholders, and context, then save. The summary has already been stored.`,
           projectMdPath: data.projectMdPath,
           projectMdContent: data.projectMdContent,
           summaryPath: data.summaryPath,
