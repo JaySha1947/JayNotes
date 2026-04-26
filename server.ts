@@ -1868,11 +1868,13 @@ Output the full updated Project.md.`;
 
   try {
     let updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
-    // Re-inject the original Project Context block verbatim
+    // ALWAYS force-replace Project Context in LLM output with the original preserved block.
+    // This works whether the LLM respected [PRESERVED] or rewrote the section itself.
     if (projectContextBlock) {
+      // Replace whatever the LLM put in ## Project Context with the original
       updatedProjectMd = updatedProjectMd.replace(
-        /## Project Context\n\[PRESERVED[^\n]*\]\n*/,
-        projectContextBlock
+        /(## Project Context[\s\S]*?)(?=\n## )/,
+        projectContextBlock.trimEnd()
       );
     }
     // Ensure **Tags:** and **Links:** are always on separate lines
