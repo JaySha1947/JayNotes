@@ -1462,12 +1462,12 @@ function buildSkeletonProjectMd(projectName: string): string {
 
 ## Project Setup / Context
 <!-- USER:START project_context -->
-Client: 
-Project: 
+Client:
+Project:
 Stakeholders:
-  - Client: 
-  - Internal: 
-Project Summary: 
+  Client:
+  Internal:
+Project Summary:
 <!-- USER:END project_context -->
 
 ## Current Status - Current/In-progress/Stopped
@@ -1486,10 +1486,6 @@ No current status available yet.
 ## Key Decisions - Decisions made, Owner
 <!-- AI:START decisions -->
 <!-- AI:END decisions -->
-
-## Unknown Stakeholders / Needs Classification
-<!-- AI:START unknown_stakeholders -->
-<!-- AI:END unknown_stakeholders -->
 
 ## Tags
 <!-- AI:START tags -->
@@ -1683,8 +1679,9 @@ Rules:
 - If something is unclear, mark it as "unclear".
 - Summary length must be proportional to the input — a short note gets a short summary. Never pad.
 - If a section has nothing to put in it, write "None." Do not invent content to fill it.
-- Use [[wikilinks]] ONLY in: Attendees names, Action Item owners, Links section. Nowhere else.
-- Do NOT use [[wikilinks]] in Discussion Summary or Open Questions — plain bold for topics only.
+- Use [[wikilinks]] ONLY in: the Links section. Nowhere else.
+- Do NOT use [[wikilinks]] anywhere else — not in Attendees, not in Action Items, not in Discussion Summary.
+- Use BOLD (**Name**) for people's names in Attendees and Action Items.
 - Use the project context to correctly classify attendees as Client or Internal.
 - Return only valid markdown. No preamble or explanation.`;
 
@@ -1706,11 +1703,9 @@ Produce the meeting summary using EXACTLY this template:
 **Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
-**Client:** [[Name]] — Role
-**Client:** [[Name]] — Role
-**Internal:** [[Name]] — Role
-**Internal:** [[Name]] — Role
-(one line per person, grouped by Client then Internal, Unknown if unclassified)
+**Client:** **Name** — Role, **Name** — Role
+**Internal:** **Name** — Role, **Name** — Role
+(Client on one line, Internal on one line. Use plain bold for names — no [[wikilinks]].)
 
 ## Discussion Summary
 Group bullets by THEME. Bold theme heading on its own line, then 1-3 plain bullets below.
@@ -1724,14 +1719,16 @@ Do NOT use [[wikilinks]] here. Plain bold for theme names only.
 
 ## Open Questions
 (Only real unresolved questions. Omit section entirely if none.)
-- Question — Name who raised it (no wikilinks)
+- Question — Name who raised it (plain text, no wikilinks)
 
 ## Action Items
 ### Internal
-- [ ] [[Owner]]: Task (Due: date or TBD)
+- [ ] **Owner**: Task (Due: date or TBD)
 
 ### Client
-- [ ] [[Owner]]: Task (Due: date or TBD)
+- [ ] **Owner**: Task (Due: date or TBD)
+
+(Use plain bold **Name** for owners — no [[wikilinks]])
 
 ## Tags
 #meetingsummary #${path.basename(path.dirname(projectMdRelPath)).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}
@@ -1771,16 +1768,25 @@ Rules:
 - NEVER touch sections marked with <!-- USER:START --> and <!-- USER:END --> — preserve them character-for-character.
 - Preserve user-checked completed action items (lines with - [x]).
 - Consolidate action items across meetings — do not duplicate.
-- Do not invent facts. Use [[wikilinks]] for people and key concepts. Use #tags.
+- Do not invent facts. Use #tags in the tags section only.
+- NO [[wikilinks]] anywhere — use plain bold **Name** for people in action items and decisions.
 - Client-facing and high-importance meetings influence Current Status and Decisions more heavily.
 - Internal check-ins only influence action items.
-- Keep AI sections concise — bullet points only.
+- Keep AI sections concise — bullet points only, no blank lines between bullets.
+- No extra blank lines inside sections — keep content tight.
 - Return only the full updated Project.md. No preamble.
+
+FORMATTING RULES:
+- active_actions: use "- [ ] **Name**: Task (Due: date)" — plain bold, no [[links]]
+- completed_actions: use "- [x] **Name**: Task (Completed: date)"
+- decisions: use "- Decision description — **Owner**"
+- current_status: 1-2 sentences max, no bullet points
+- tags: #tags only, no [[links]]
 
 MARKER RULES:
 - Preserve every <!-- AI:START --> and <!-- AI:END --> marker exactly.
 - Preserve every <!-- USER:START --> and <!-- USER:END --> marker and all content between them exactly.
-- Do NOT copy full summaries into Project.md — extract only decisions, actions, status changes, new stakeholders.`;
+- Do NOT copy full summaries into Project.md — extract only decisions, actions, status changes.`;
 
   const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}

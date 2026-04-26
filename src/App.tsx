@@ -152,13 +152,11 @@ export default function App() {
     const projectName = agentFlow.extractData?.projectName || projectForm.project || 'Project';
     const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-    // Build classified stakeholder lists
+    // Build classified stakeholder lists — plain text, no [[links]]
     const clientStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'client')
       .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
     const internalStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
       .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
-    const unknownStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'unknown')
-      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}`).join('\n');
 
     const content = `# ${projectName}
 
@@ -167,9 +165,9 @@ export default function App() {
 Client: ${projectForm.client}
 Project: ${projectForm.project}
 Stakeholders:
-  - Client:
+  Client:
 ${clientStakeholders || '  - (none classified yet)'}
-  - Internal:
+  Internal:
 ${internalStakeholders || '  - (none classified yet)'}
 Project Summary: ${projectForm.summary}
 <!-- USER:END project_context -->
@@ -190,11 +188,6 @@ No current status available yet.
 ## Key Decisions - Decisions made, Owner
 <!-- AI:START decisions -->
 <!-- AI:END decisions -->
-
-## Unknown Stakeholders / Needs Classification
-<!-- AI:START unknown_stakeholders -->
-${unknownStakeholders}
-<!-- AI:END unknown_stakeholders -->
 
 ## Tags
 <!-- AI:START tags -->
@@ -962,7 +955,7 @@ ${unknownStakeholders}
                 <textarea placeholder="What is this project about? What problem does it solve?"
                   value={projectForm.summary}
                   onChange={e => setProjectForm(f => ({ ...f, summary: e.target.value }))}
-                  rows={2}
+                  rows={6}
                   className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none" />
               </div>
               {/* Stakeholder classifier */}
