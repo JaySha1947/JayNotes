@@ -1604,11 +1604,11 @@ JSON shape:
   "project": "project or engagement name or empty string",
   "summary": "1-2 sentence project description or empty string",
   "attendees": [
-    { "name": "Full Name", "role": "their role or title", "org": "their company or team" }
+    { "name": "Full Name", "role": "Professional title or designation — be specific and context-aware. Examples: 'VP of Insights & Analytics', 'Engagement Lead', 'Brand Strategy Manager', 'Senior Research Analyst', 'IT Architecture Lead'. Infer seniority from their contributions and language. Never just write 'stakeholder' or 'team member'.", "org": "their company or team name" }
   ],
   "unmappedNames": ["Name1", "Name2"]
 }
-unmappedNames: names that appear in the note but whose full identity is unclear or ambiguous.
+unmappedNames: first names or partial names that appear in the note but cannot be mapped to a full name.
 If nothing can be extracted, return empty strings and empty arrays.`;
 
   const extractUserPrompt = `Meeting note:

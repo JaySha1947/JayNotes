@@ -486,17 +486,14 @@ No current status available yet.
   // Auto-scroll tab bar so active tab is always visible
   useEffect(() => {
     if (!activeTabId || !tabsRef.current) return;
-    const container = tabsRef.current;
-    const activeEl = container.querySelector(`[data-tabid="${activeTabId}"]`) as HTMLElement;
-    if (activeEl) {
-      const { offsetLeft, offsetWidth } = activeEl;
-      const { scrollLeft, clientWidth } = container;
-      if (offsetLeft < scrollLeft) {
-        container.scrollTo({ left: offsetLeft - 8, behavior: 'smooth' });
-      } else if (offsetLeft + offsetWidth > scrollLeft + clientWidth) {
-        container.scrollTo({ left: offsetLeft + offsetWidth - clientWidth + 8, behavior: 'smooth' });
+    // Small timeout lets React finish rendering the tab before we scroll
+    const t = setTimeout(() => {
+      const activeEl = tabsRef.current?.querySelector(`[data-tabid="${activeTabId}"]`) as HTMLElement;
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
       }
-    }
+    }, 30);
+    return () => clearTimeout(t);
   }, [activeTabId]);
 
   useEffect(() => {
@@ -981,20 +978,26 @@ No current status available yet.
                   <label className="block text-xs font-semibold text-text-normal mb-1">Classify Stakeholders</label>
                   <p className="text-xs text-text-muted mb-3">Click to classify. Click the name to rename if it was mis-identified.</p>
                   <div className="space-y-2">
-                    {agentFlow.stakeholders.map(s => (
-                      <div key={s.name} className="flex items-center gap-2 bg-bg-secondary rounded-lg px-3 py-2">
-                        {/* Editable name */}
+                    {agentFlow.stakeholders.map((s, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-bg-secondary rounded-lg px-3 py-2">
+                        {/* Editable name — key is index so React never unmounts on name change */}
                         <input
                           type="text"
                           value={s.name}
-                          onChange={e => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, name: e.target.value } : st) }))}
-                          className="min-w-0 w-32 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                          onChange={e => {
+                            const newName = e.target.value;
+                            setAgentFlow(f => ({
+                              ...f,
+                              stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, name: newName } : st)
+                            }));
+                          }}
+                          className="min-w-0 w-36 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
                         />
-                        {s.role && <span className="text-xs text-text-muted flex-shrink-0">— {s.role}</span>}
+                        {s.role && <span className="text-xs text-text-muted flex-shrink-0 truncate max-w-[140px]">{s.role}</span>}
                         <div className="flex gap-1.5 ml-auto flex-shrink-0">
                           {(['client', 'internal', 'unknown'] as const).map(bucket => (
                             <button key={bucket}
-                              onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, bucket } : st) }))}
+                              onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, bucket } : st) }))}
                               className="px-2 py-0.5 text-xs rounded border transition-colors"
                               style={{
                                 borderColor: s.bucket === bucket ? 'var(--interactive-accent)' : 'var(--border-color)',
@@ -1038,8 +1041,8 @@ No current status available yet.
               </div>
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0 space-y-3">
-              {agentFlow.stakeholders.map(s => (
-                <div key={s.name} className="flex items-center gap-3 bg-bg-secondary rounded-lg px-3 py-2">
+              {agentFlow.stakeholders.map((s, idx) => (
+                <div key={idx} className="flex items-center gap-3 bg-bg-secondary rounded-lg px-3 py-2">
                   {/* Name chip */}
                   <div className="flex-shrink-0 min-w-[160px]">
                     <p className="text-sm font-medium text-text-normal">{s.name}</p>
@@ -1049,7 +1052,7 @@ No current status available yet.
                   <div className="flex gap-1.5 flex-wrap flex-1">
                     {(['client', 'internal', 'unknown'] as const).map(bucket => (
                       <button key={bucket}
-                        onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, bucket, mappedTo: undefined } : st) }))}
+                        onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, bucket, mappedTo: undefined } : st) }))}
                         className="px-2.5 py-1 text-xs rounded-md border transition-colors"
                         style={{
                           borderColor: s.bucket === bucket && !s.mappedTo ? 'var(--interactive-accent)' : 'var(--border-color)',
@@ -1065,14 +1068,13 @@ No current status available yet.
                       onChange={e => {
                         const canonical = e.target.value;
                         if (!canonical) {
-                          setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, mappedTo: undefined } : st) }));
+                          setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, mappedTo: undefined } : st) }));
                           return;
                         }
-                        // Find the bucket of the canonical person from knownStakeholders
                         setAgentFlow(f => ({
                           ...f,
                           nameAliases: { ...f.nameAliases, [s.name]: canonical },
-                          stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, mappedTo: canonical, bucket: 'client' } : st),
+                          stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, mappedTo: canonical, bucket: 'client' } : st),
                         }));
                       }}
                       className="px-2 py-1 text-xs rounded-md border border-border-color bg-bg-primary text-text-muted outline-none focus:border-interactive-accent transition-colors">
