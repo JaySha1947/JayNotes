@@ -170,10 +170,15 @@ export default function App() {
     const content = `# ${projectName}
 
 ## Project Context
+
 **Client:** ${clientName}
+
 **Project:** ${projectForm.project || projectName}
+
 **Client Stakeholders:** ${clientLine}
+
 **Internal Stakeholders:** ${internalLine}
+
 **Project Summary:** ${projectForm.summary}
 
 ## Current Status
@@ -189,6 +194,7 @@ No current status available yet.
 (none yet)
 
 **Tags:** #active-project #${slug}
+
 **Links:** [[${projectFileTitle}]]${clientName ? ` [[${clientName}]]` : ''}
 `;
     // Save Project.md with final ClientName-ProjectName.md filename

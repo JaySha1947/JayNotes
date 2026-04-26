@@ -1487,6 +1487,7 @@ No current status available yet.
 (none yet)
 
 **Tags:** #active-project #${slug}
+
 **Links:** [[${projectName}]]
 `;
 }
@@ -1738,17 +1739,17 @@ ${noteContent}
 
 ---
 
-Produce the meeting summary using EXACTLY this template. Every field on its own line.
+Produce the meeting summary using EXACTLY this template. Blank line between EVERY field.
 
 # ${noteBaseName} — ${dateStr}
 **Source:** [[${noteBaseName}]]
 **Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
-**Client:** Name — Role, Name — Role
-**Internal:** Name — Role, Name — Role
 
-(Client and Internal MUST be on separate lines. Comma-separated. Plain text — no [[wikilinks]].)
+**Client:** Name — Role, Name — Role
+
+**Internal:** Name — Role, Name — Role
 
 ## Discussion Summary
 
@@ -1767,17 +1768,19 @@ Produce the meeting summary using EXACTLY this template. Every field on its own 
 - [ ] **Name**: Task (Due: date or TBD)
 
 **Tags:** #meetingsummary #${projectSlug}
+
 **Links:** [[${projectFileName.replace('.md', '')}]]${clientName ? ` [[${clientName}]]` : ''}
 
-(Tags and Links MUST be on separate lines. No ## heading for Tags or Links.)`;
+(Blank line before Tags. Blank line before Links. They must be on separate lines.)`;
 
   let summaryContent: string;
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
-    // Defensive: ensure **Tags:** and **Links:** are always on separate lines
+    // Ensure blank line before **Tags:** and blank line before **Links:**
     summaryContent = summaryContent
-      .replace(/(\*\*Tags:\*\*[^\n]+)\s+(\*\*Links:\*\*)/g, '$1\n$2')
-      .replace(/(Tags:[^\n]+)\s+(Links:)/g, '$1\nLinks:');
+      .replace(/([^\n])\n(\*\*Tags:\*\*)/g, '$1\n\n$2')
+      .replace(/([^\n])\n(\*\*Links:\*\*)/g, '$1\n\n$2')
+      .replace(/(\*\*Tags:\*\*[^\n]+)\n(\*\*Links:\*\*)/g, '$1\n\n$2');
   } catch (err: any) {
     console.error('[agent/generate-summary] summary LLM failed:', err.message);
     return res.status(502).json({ error: `Summary generation failed: ${err.message}` });
@@ -1820,7 +1823,7 @@ Produce the meeting summary using EXACTLY this template. Every field on its own 
   const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
 Update ONLY the updatable sections. Project Context is preserved and will be re-injected.
 
-EXACT OUTPUT STRUCTURE:
+EXACT OUTPUT STRUCTURE — blank lines between ALL top-level items:
 
 # [Project Name]
 
@@ -1840,17 +1843,19 @@ EXACT OUTPUT STRUCTURE:
 - Decision — **Owner**
 
 **Tags:** #tag1 #tag2
-**Links:** [[ProjectFile]] [[MeetingSummary1]] [[MeetingSummary2]]
+
+**Links:** [[ProjectFile]] [[MeetingSummary1]]
 
 RULES:
 1. Output the FULL file — [PRESERVED — DO NOT MODIFY] placeholder stays as-is.
-2. **Tags:** on its own line. **Links:** on its own line immediately after.
-3. No [[wikilinks]] except on **Links:** line.
-4. No blank lines between bullets within a section.
-5. No meeting summary content in output.
-6. Consolidate action items — no duplicates.
-7. Preserve - [x] checked items.
-8. Output ONLY the Project.md. Nothing before or after.`;
+2. Blank line BEFORE **Tags:** and blank line BEFORE **Links:**.
+3. **Tags:** and **Links:** on SEPARATE lines with blank line between them.
+4. No [[wikilinks]] except on **Links:** line.
+5. No blank lines between bullets within a section.
+6. No meeting summary content in output.
+7. Consolidate action items — no duplicates.
+8. Preserve - [x] checked items.
+9. Output ONLY the Project.md. Nothing before or after.`;
 
   const mergeUserPrompt = `## Current Project.md
 ${projectMdForLLM}
@@ -1862,25 +1867,27 @@ ${allSummariesContent}
 
 ---
 
-**Tags:** line (its own line): **Tags:** #active-project #${projectSlug} [add relevant tags from meetings]
-**Links:** line (immediately after Tags, its own line): **Links:** [[${projectFileName.replace('.md', '')}]] [[${clientName || projectName}]]${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
-Output the full updated Project.md.`;
+Output the updated Project.md.
+**Tags:** line: **Tags:** #active-project #${projectSlug} [space-separated tags from meetings]
+**Links:** line (blank line after Tags, then Links): **Links:** [[${projectFileName.replace('.md', '')}]] [[${clientName || projectName}]]${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}`;
 
   try {
     let updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
+
     // ALWAYS force-replace Project Context in LLM output with the original preserved block.
-    // This works whether the LLM respected [PRESERVED] or rewrote the section itself.
     if (projectContextBlock) {
-      // Replace whatever the LLM put in ## Project Context with the original
       updatedProjectMd = updatedProjectMd.replace(
         /(## Project Context[\s\S]*?)(?=\n## )/,
         projectContextBlock.trimEnd()
       );
     }
-    // Ensure **Tags:** and **Links:** are always on separate lines
+
+    // Ensure **Tags:** and **Links:** each have a blank line before them
     updatedProjectMd = updatedProjectMd
-      .replace(/(\*\*Tags:\*\*[^\n]+)\s+(\*\*Links:\*\*)/g, '$1\n$2')
-      .replace(/(Tags:[^\n]+)\s+(Links:)/g, '$1\nLinks:');
+      .replace(/([^\n])\n(\*\*Tags:\*\*)/g, '$1\n\n$2')
+      .replace(/([^\n])\n(\*\*Links:\*\*)/g, '$1\n\n$2')
+      .replace(/(\*\*Tags:\*\*[^\n]+)\n(\*\*Links:\*\*)/g, '$1\n\n$2');
+
     fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
   } catch (err: any) {
     console.error('[agent/generate-summary] Project.md merge failed:', err.message);
