@@ -1465,10 +1465,13 @@ function buildSkeletonProjectMd(projectName: string): string {
   return `# ${projectName}
 
 ## Project Context
+
 **Client:**
-**Project:** ${projectName}
+
 **Client Stakeholders:**
+
 **Internal Stakeholders:**
+
 **Project Summary:**
 
 ## Current Status
@@ -1808,7 +1811,9 @@ Produce the meeting summary using EXACTLY this template. Every field on its own 
   } catch { /* ignore */ }
 
   // Extract the Project Context block BEFORE passing to LLM — re-injected verbatim after.
-  const projectContextMatch = projectMdContent.match(/(## Project Context\n[\s\S]*?\n\n)/);
+  const projectContextMatch = projectMdContent.match(/(## Project Context
+[sS]*?)(?=
+## )/);
   const projectContextBlock = projectContextMatch ? projectContextMatch[1] : null;
   const projectMdForLLM = projectContextBlock
     ? projectMdContent.replace(projectContextBlock, '## Project Context\n[PRESERVED — DO NOT MODIFY]\n\n')
