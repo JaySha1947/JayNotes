@@ -1392,12 +1392,26 @@ app.get('/api/templates', authHeaderOnly, (req: any, res) => {
  * Returns the assistant message text.
  */
 async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise<string> {
-  // Read at call-time (not module load) so a pm2 restart picks up .env changes.
-  const apiKey = process.env.OPENROUTER_API_KEY || OPENROUTER_API_KEY;
-  const model   = process.env.OPENROUTER_MODEL   || OPENROUTER_MODEL;
-  const baseUrl = process.env.OPENROUTER_BASE_URL || OPENROUTER_BASE_URL;
+  const apiKey   = process.env.OPENROUTER_API_KEY   || OPENROUTER_API_KEY;
+  const model    = process.env.OPENROUTER_MODEL      || OPENROUTER_MODEL;
+  const baseUrl  = process.env.OPENROUTER_BASE_URL   || OPENROUTER_BASE_URL;
+  const provider = process.env.OPENROUTER_PROVIDER   || ''; // e.g. "atlas-cloud"
 
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set in .env — add it and run: pm2 restart <app>');
+
+  const body: any = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt },
+    ],
+    temperature: 0.2,
+  };
+
+  // Pin to a specific provider if set (OpenRouter provider routing)
+  if (provider) {
+    body.provider = { order: [provider], allow_fallbacks: false };
+  }
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -1407,14 +1421,7 @@ async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise
       'HTTP-Referer': 'https://jaynotes.app',
       'X-Title': 'JayNotes Agent Space',
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.2,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
