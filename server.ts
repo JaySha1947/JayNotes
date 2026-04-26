@@ -1503,11 +1503,34 @@ No current status available yet.
 `;
 }
 
-// POST /api/agent/summarize
-// Body: { notePath: string, agentSpaceFolder: string }
-// Reads the note, calls OpenRouter for a structured summary, writes it to
-// AgentSpace, then (if Project.md exists) calls OpenRouter to merge-update it.
-app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
+// =============================================================================
+// Agent Space Routes
+// =============================================================================
+
+// Helper: parse known stakeholders from Project.md content
+function parseKnownStakeholders(projectMdContent: string): string[] {
+  const names: string[] = [];
+  // Extract names from USER:START project_context block
+  const contextMatch = projectMdContent.match(/<!-- USER:START project_context -->([\s\S]*?)<!-- USER:END project_context -->/);
+  if (contextMatch) {
+    const lines = contextMatch[1].split('\n');
+    for (const line of lines) {
+      const m = line.match(/[-•]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
+      if (m) names.push(m[1].trim());
+    }
+  }
+  // Also extract [[wikilinks]] which are names
+  const wikiMatches = projectMdContent.matchAll(/\[\[([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\]\]/g);
+  for (const m of wikiMatches) names.push(m[1]);
+  return [...new Set(names)];
+}
+
+// POST /api/agent/extract
+// Phase 1: Read note, extract project context + attendees via LLM.
+// Creates Project.md skeleton (first time) or reads existing.
+// Does NOT generate the meeting summary yet.
+// Body: { notePath, agentSpaceFolder }
+app.post('/api/agent/extract', authHeaderOnly, async (req: any, res) => {
   const { vaultPath } = getUserScope(req.user.username);
   const { notePath, agentSpaceFolder } = req.body;
 
@@ -1516,21 +1539,16 @@ app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
   if (typeof agentSpaceFolder !== 'string' || !agentSpaceFolder.trim())
     return res.status(400).json({ error: 'agentSpaceFolder is required' });
 
-  // --- Resolve & validate paths ---
   const noteAbsPath = safeJoin(vaultPath, notePath);
   if (!noteAbsPath) return res.status(403).json({ error: 'Access denied' });
   if (!fs.existsSync(noteAbsPath)) return res.status(404).json({ error: 'Note not found' });
 
   const noteContent = fs.readFileSync(noteAbsPath, 'utf-8');
   const noteStat = fs.statSync(noteAbsPath);
-  const noteModDate = new Date(noteStat.mtimeMs);
-  const dateStr = noteModDate.toISOString().slice(0, 10); // YYYY-MM-DD
-
-  // Original filename without extension, used in summary filename
+  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10);
   const noteBaseName = path.basename(notePath, '.md');
   const summaryFileName = `${dateStr} — ${noteBaseName}.md`;
 
-  // --- Derive mirror structure ---
   const { meetingSummaryRelDir, projectMdRelPath, projectName, mirrorRelDir } =
     deriveMirrorPaths(notePath, agentSpaceFolder.trim());
 
@@ -1539,25 +1557,124 @@ app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
   const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
 
   if (!meetingSummaryAbsDir || !projectMdAbsPath || !summaryAbsPath)
-    return res.status(403).json({ error: 'Derived paths escape vault — check agentSpaceFolder value' });
+    return res.status(403).json({ error: 'Derived paths escape vault' });
 
-  // --- Ensure folder structure exists ---
   if (!fs.existsSync(meetingSummaryAbsDir)) fs.mkdirSync(meetingSummaryAbsDir, { recursive: true });
 
-  // --- First-time project setup ---
   const isFirstTime = !fs.existsSync(projectMdAbsPath);
   if (isFirstTime) {
     fs.writeFileSync(projectMdAbsPath, buildSkeletonProjectMd(projectName), 'utf-8');
   }
 
   const projectMdContent = fs.readFileSync(projectMdAbsPath, 'utf-8');
+  const knownStakeholders = parseKnownStakeholders(projectMdContent);
 
-  // --- Build summarization prompt ---
-  // On first time, project context is just the name — skeleton is empty placeholders
-  const projectContext = isFirstTime
-    ? `Project name: ${projectName}`
-    : `## Project Context (Project.md)\n${projectMdContent}`;
+  // LLM call: extract structured context from the note
+  const extractSystemPrompt = `You are extracting structured context from a meeting note.
+Return ONLY a valid JSON object. No markdown, no explanation, no code fences.
+JSON shape:
+{
+  "company": "client company name or empty string",
+  "project": "project or engagement name or empty string",
+  "summary": "1-2 sentence project description or empty string",
+  "attendees": [
+    { "name": "Full Name", "role": "their role or title", "org": "their company or team" }
+  ],
+  "unmappedNames": ["Name1", "Name2"]
+}
+unmappedNames: names that appear in the note but whose full identity is unclear or ambiguous.
+If nothing can be extracted, return empty strings and empty arrays.`;
 
+  const extractUserPrompt = `Meeting note:
+${noteContent}
+
+Known stakeholders from Project.md (use these to validate names):
+${knownStakeholders.length ? knownStakeholders.join(', ') : 'None yet'}
+
+Extract the JSON context now.`;
+
+  let extracted = { company: '', project: projectName, summary: '', attendees: [] as any[], unmappedNames: [] as string[] };
+  try {
+    const raw = await callOpenRouter(extractSystemPrompt, extractUserPrompt);
+    // Strip any accidental markdown fences
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    extracted = { ...extracted, ...parsed };
+  } catch (err: any) {
+    console.error('[agent/extract] context extraction failed:', err.message);
+    // Non-fatal — proceed with defaults
+  }
+
+  // For returning projects: detect new stakeholders not in Project.md
+  let newStakeholders: any[] = [];
+  if (!isFirstTime && extracted.attendees.length > 0) {
+    const knownLower = knownStakeholders.map(n => n.toLowerCase());
+    newStakeholders = extracted.attendees.filter(
+      (a: any) => !knownLower.some(k => k.includes(a.name.toLowerCase()) || a.name.toLowerCase().includes(k))
+    );
+  }
+
+  res.json({
+    success: true,
+    isFirstTime,
+    projectName,
+    projectMdPath: projectMdRelPath,
+    summaryFileName,
+    meetingSummaryRelDir,
+    mirrorRelDir,
+    notePath,
+    agentSpaceFolder,
+    extracted,          // { company, project, summary, attendees, unmappedNames }
+    newStakeholders,    // attendees not in existing Project.md
+    knownStakeholders,
+  });
+});
+
+// POST /api/agent/generate-summary
+// Phase 2: Called after user has saved/confirmed Project.md.
+// Reads final Project.md, generates meeting summary, updates Project.md.
+// Body: { notePath, agentSpaceFolder, summaryFileName, nameAliases? }
+app.post('/api/agent/generate-summary', authHeaderOnly, async (req: any, res) => {
+  const { vaultPath } = getUserScope(req.user.username);
+  const { notePath, agentSpaceFolder, summaryFileName, nameAliases } = req.body;
+
+  if (typeof notePath !== 'string' || typeof agentSpaceFolder !== 'string' || typeof summaryFileName !== 'string')
+    return res.status(400).json({ error: 'notePath, agentSpaceFolder and summaryFileName are required' });
+
+  const noteAbsPath = safeJoin(vaultPath, notePath);
+  if (!noteAbsPath || !fs.existsSync(noteAbsPath))
+    return res.status(404).json({ error: 'Note not found' });
+
+  let noteContent = fs.readFileSync(noteAbsPath, 'utf-8');
+  const noteStat = fs.statSync(noteAbsPath);
+  const dateStr = new Date(noteStat.mtimeMs).toISOString().slice(0, 10);
+  const noteBaseName = path.basename(notePath, '.md');
+
+  // Apply name aliases — replace unmapped/informal names with canonical names
+  if (nameAliases && typeof nameAliases === 'object') {
+    for (const [informal, canonical] of Object.entries(nameAliases)) {
+      if (informal && canonical) {
+        noteContent = noteContent.replace(new RegExp(`\\b${informal}\\b`, 'gi'), canonical as string);
+      }
+    }
+  }
+
+  const { meetingSummaryRelDir, projectMdRelPath } = deriveMirrorPaths(notePath, agentSpaceFolder.trim());
+  const meetingSummaryAbsDir = safeJoin(vaultPath, meetingSummaryRelDir);
+  const projectMdAbsPath = safeJoin(vaultPath, projectMdRelPath);
+  const summaryAbsPath = safeJoin(vaultPath, `${meetingSummaryRelDir}/${summaryFileName}`);
+
+  if (!meetingSummaryAbsDir || !projectMdAbsPath || !summaryAbsPath)
+    return res.status(403).json({ error: 'Paths escape vault' });
+
+  if (!fs.existsSync(meetingSummaryAbsDir)) fs.mkdirSync(meetingSummaryAbsDir, { recursive: true });
+  if (!fs.existsSync(projectMdAbsPath))
+    return res.status(404).json({ error: 'Project.md not found — save it first' });
+
+  // Read the FINAL Project.md (after user has filled it in)
+  const projectMdContent = fs.readFileSync(projectMdAbsPath, 'utf-8');
+
+  // --- Meeting Summary LLM ---
   const summarizeSystemPrompt = `You are a project memory assistant for a markdown notes app.
 Your job is to convert a raw meeting note into a clean, structured meeting summary.
 
@@ -1567,12 +1684,12 @@ Rules:
 - Summary length must be proportional to the input — a short note gets a short summary. Never pad.
 - If a section has nothing to put in it, write "None." Do not invent content to fill it.
 - Use [[wikilinks]] ONLY in: Attendees names, Action Item owners, Links section. Nowhere else.
-- Do NOT use [[wikilinks]] in Discussion Summary or Open Questions — use plain bold for topics only.
-- Use #tags only in the Tags section.
-- Use the project context stakeholder list to classify attendees. Anyone not listed goes under Unknown.
+- Do NOT use [[wikilinks]] in Discussion Summary or Open Questions — plain bold for topics only.
+- Use the project context to correctly classify attendees as Client or Internal.
 - Return only valid markdown. No preamble or explanation.`;
 
-  const summarizeUserPrompt = `${projectContext}
+  const summarizeUserPrompt = `## Project Context (Project.md)
+${projectMdContent}
 
 ## Raw Meeting Note
 File: ${notePath}
@@ -1582,32 +1699,31 @@ ${noteContent}
 
 ---
 
-Produce the meeting summary using EXACTLY this template. Be concise — every bullet must earn its place.
-Do not add sections. Do not rename sections. Do not pad thin content.
+Produce the meeting summary using EXACTLY this template:
 
 # ${noteBaseName} — ${dateStr}
 **Source:** [[${noteBaseName}]]
 **Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
-**Client:** [[Name]] — Role, [[Name]] — Role
-**Internal:** [[Name]] — Role, [[Name]] — Role
-**Unknown:** Name — context clue (omit line if none)
+**Client:** [[Name]] — Role
+**Client:** [[Name]] — Role
+**Internal:** [[Name]] — Role
+**Internal:** [[Name]] — Role
+(one line per person, grouped by Client then Internal, Unknown if unclassified)
 
 ## Discussion Summary
-Group bullets by THEME. Each theme is a bold heading on its own line, followed by 1-3 plain bullet points.
-Do NOT use [[wikilinks]] here. Use plain bold for theme names only.
-Do NOT write one giant flat list — group related points together.
+Group bullets by THEME. Bold theme heading on its own line, then 1-3 plain bullets below.
+Do NOT use [[wikilinks]] here. Plain bold for theme names only.
 
 **Theme Name**
-- Key point or decision (plain text, no links)
-- Another point if needed
+- Key point or decision (plain text)
 
 **Next Theme**
 - Key point
 
 ## Open Questions
-(Only real unresolved questions from the note. Omit section entirely if none.)
+(Only real unresolved questions. Omit section entirely if none.)
 - Question — Name who raised it (no wikilinks)
 
 ## Action Items
@@ -1618,113 +1734,80 @@ Do NOT write one giant flat list — group related points together.
 - [ ] [[Owner]]: Task (Due: date or TBD)
 
 ## Tags
-#meetingsummary #${projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}
+#meetingsummary #${path.basename(path.dirname(projectMdRelPath)).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}
 
 ## Links
-[[${projectName}]]`;
+[[${path.basename(path.dirname(projectMdRelPath))}]]`;
 
   let summaryContent: string;
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
   } catch (err: any) {
-    console.error('[agent/summarize] OpenRouter summarize error:', err.message);
-    // On first time: skeleton is already written — return it so modal shows
-    // On returning: tell the user LLM failed but don't lose their project
-    if (isFirstTime) {
-      return res.json({
-        success: true,
-        summaryPath: null,
-        projectMdPath: projectMdRelPath,
-        isFirstTime: true,
-        projectMdContent: buildSkeletonProjectMd(projectName),
-        mirrorRelDir,
-        projectName,
-        warning: `Project.md skeleton created but LLM summarization failed: ${err.message}`,
-      });
-    }
-    return res.status(502).json({ error: `LLM call failed: ${err.message}` });
+    console.error('[agent/generate-summary] summary LLM failed:', err.message);
+    return res.status(502).json({ error: `Summary generation failed: ${err.message}` });
   }
 
-  // --- Write summary file ---
   fs.writeFileSync(summaryAbsPath, summaryContent, 'utf-8');
 
-  // --- Update Project.md (skip on first time — user reviews skeleton first) ---
-  let updatedProjectMd: string | null = null;
-  if (!isFirstTime) {
-    // Load ALL existing meeting summaries for this project so the update
-    // has full context, not just the latest meeting
-    let allSummariesContent = '';
-    try {
-      if (fs.existsSync(meetingSummaryAbsDir)) {
-        const summaryFiles = fs.readdirSync(meetingSummaryAbsDir)
-          .filter(f => f.endsWith('.md'))
-          .sort(); // chronological by filename (YYYY-MM-DD prefix)
-        allSummariesContent = summaryFiles.map(f => {
-          const content = fs.readFileSync(`${meetingSummaryAbsDir}/${f}`, 'utf-8');
-          return `### ${f}\n${content}`;
-        }).join('\n\n---\n\n');
-      }
-    } catch (err) {
-      // fallback to just the latest summary
-      allSummariesContent = summaryContent;
+  // --- Project.md merge LLM (always runs — every meeting updates Project.md) ---
+  let allSummariesContent = summaryContent;
+  try {
+    if (fs.existsSync(meetingSummaryAbsDir)) {
+      const summaryFiles = fs.readdirSync(meetingSummaryAbsDir)
+        .filter(f => f.endsWith('.md'))
+        .sort();
+      allSummariesContent = summaryFiles.map(f => {
+        const content = fs.readFileSync(`${meetingSummaryAbsDir}/${f}`, 'utf-8');
+        return `### ${f}\n${content}`;
+      }).join('\n\n---\n\n');
     }
+  } catch { /* use latest summary as fallback */ }
 
-    const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
-You will receive:
-1. The existing Project.md
-2. All meeting summaries for the project
+  const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
+You will receive the existing Project.md and all meeting summaries for the project.
 
-Your job:
+Rules:
 - Update ONLY sections marked with <!-- AI:START --> and <!-- AI:END --> markers.
-- NEVER touch sections marked with <!-- USER:START --> and <!-- USER:END --> — these are user-managed, preserve them character-for-character.
+- NEVER touch sections marked with <!-- USER:START --> and <!-- USER:END --> — preserve them character-for-character.
 - Preserve user-checked completed action items (lines with - [x]).
-- Consolidate action items across meetings — do not duplicate action items.
-- Do not invent facts.
-- Use [[wikilinks]] for clients, projects, people, deliverables, workstreams, and recurring concepts.
-- Use #tags for classification.
-- Client-facing and high-importance meetings should influence Current Status and Decisions more heavily.
-- Internal check-ins should mainly influence action items — do not let them overwrite major client decisions.
-- Keep each AI-managed section concise — bullet points only, no prose paragraphs.
-- Return only the full updated Project.md markdown. No preamble or explanation.
+- Consolidate action items across meetings — do not duplicate.
+- Do not invent facts. Use [[wikilinks]] for people and key concepts. Use #tags.
+- Client-facing and high-importance meetings influence Current Status and Decisions more heavily.
+- Internal check-ins only influence action items.
+- Keep AI sections concise — bullet points only.
+- Return only the full updated Project.md. No preamble.
 
-CRITICAL MARKER RULES:
-- Every <!-- AI:START section --> and <!-- AI:END section --> marker must be preserved exactly.
-- Every <!-- USER:START section --> and <!-- USER:END section --> marker and all content between them must be preserved exactly.
-- Only write new content between AI markers — never between USER markers.
-- Do NOT copy full meeting summaries into Project.md — extract only decisions, actions, status changes, and new stakeholders.`;
+MARKER RULES:
+- Preserve every <!-- AI:START --> and <!-- AI:END --> marker exactly.
+- Preserve every <!-- USER:START --> and <!-- USER:END --> marker and all content between them exactly.
+- Do NOT copy full summaries into Project.md — extract only decisions, actions, status changes, new stakeholders.`;
 
-    const mergeUserPrompt = `## Current Project.md
+  const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
 
 ---
 
-## All Meeting Summaries for This Project
+## All Meeting Summaries
 ${allSummariesContent}
 
 ---
 
-Return the full updated Project.md. Preserve all AI markers exactly. Bullet points only inside AI-managed sections. Do not duplicate action items. Preserve user-checked items.`;
+Return the full updated Project.md. Preserve all markers. Bullet points only in AI sections.`;
 
-    try {
-      updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
-      fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
-    } catch (err: any) {
-      // Non-fatal: summary was already saved, just log the merge failure
-      console.error('[agent/summarize] Project.md merge failed:', err.message);
-    }
+  try {
+    const updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
+    fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
+  } catch (err: any) {
+    console.error('[agent/generate-summary] Project.md merge failed:', err.message);
+    // Non-fatal — summary was saved
   }
 
   res.json({
     success: true,
     summaryPath: `${meetingSummaryRelDir}/${summaryFileName}`,
     projectMdPath: projectMdRelPath,
-    isFirstTime,
-    projectMdContent: isFirstTime ? buildSkeletonProjectMd(projectName) : (updatedProjectMd || projectMdContent),
-    mirrorRelDir,
-    projectName,
   });
 });
-
 // POST /api/agent/project-md
 // Body: { projectMdPath: string, content: string }
 // Saves user-edited Project.md content.

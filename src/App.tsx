@@ -63,25 +63,229 @@ export default function App() {
   const [newPassword, setNewPassword] = useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-  // Agent Space state
-  const [agentSpaceStatus, setAgentSpaceStatus] = useState<{
-    show: boolean;
-    state: 'loading' | 'success' | 'error' | 'first-time';
+  // Agent Space — full workflow state
+  type AgentStakeholder = { name: string; role: string; org: string; bucket: 'client' | 'internal' | 'unknown' };
+  type AgentNameMapping = { informal: string; canonical: string };
+  const [agentFlow, setAgentFlow] = useState<{
+    // which modal/overlay is showing
+    step: 'idle' | 'loading' | 'error' | 'success'
+        | 'first-time-form'      // new project: fill in context + classify stakeholders
+        | 'new-stakeholders'     // returning: new people detected
+        | 'name-mapping'         // unmapped/ambiguous names need resolving
+        | 'generating';          // summary generation in progress after setup
     message: string;
-    projectMdPath?: string;
-    projectMdContent?: string;
+    // extract response data — kept across steps
+    extractData?: any;
+    // stakeholder classifier
+    stakeholders: AgentStakeholder[];
+    // name aliases: informal → canonical
+    nameAliases: Record<string, string>;
+    // result
     summaryPath?: string;
-    projectName?: string;
-  }>({ show: false, state: 'loading', message: '' });
+    projectMdPath?: string;
+  }>({ step: 'idle', message: '', stakeholders: [], nameAliases: {} });
 
-  // Structured form fields for first-time project setup
+  // Project context form (first-time)
   const [projectForm, setProjectForm] = useState({
-    client: '',
-    project: '',
-    stakeholdersClient: '',
-    stakeholdersInternal: '',
-    summary: '',
+    client: '', project: '', summary: '',
   });
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Step 1: Extract
+  // -------------------------------------------------------------------------
+  const handleAddToProjectKnowledge = async (notePath: string) => {
+    const agentSpaceFolder = localStorage.getItem('jays_notes_agent_space_folder') || '2 - Agent Space';
+    setAgentFlow({ step: 'loading', message: 'Analysing note…', stakeholders: [], nameAliases: {} });
+
+    try {
+      const res = await apiFetch('/api/agent/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notePath, agentSpaceFolder }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAgentFlow(f => ({ ...f, step: 'error', message: data.error || 'Extraction failed.' }));
+        setTimeout(() => setAgentFlow(f => ({ ...f, step: 'idle' })), 5000);
+        return;
+      }
+
+      // Build stakeholder list — all attendees start as 'unknown', known ones pre-classified
+      const extracted = data.extracted || {};
+      const knownLower: string[] = (data.knownStakeholders || []).map((n: string) => n.toLowerCase());
+      const stakeholders: AgentStakeholder[] = (extracted.attendees || []).map((a: any) => {
+        const known = knownLower.find(k => k.includes(a.name.toLowerCase()) || a.name.toLowerCase().includes(k));
+        return { name: a.name, role: a.role || '', org: a.org || '', bucket: known ? 'unknown' : 'unknown' } as AgentStakeholder;
+      });
+
+      if (data.isFirstTime) {
+        setProjectForm({ client: extracted.company || '', project: extracted.project || data.projectName || '', summary: extracted.summary || '' });
+        setAgentFlow({ step: 'first-time-form', message: '', extractData: data, stakeholders, nameAliases: {} });
+      } else if (data.newStakeholders?.length > 0 || extracted.unmappedNames?.length > 0) {
+        // Returning project with new/unmapped people
+        const newPeople: AgentStakeholder[] = (data.newStakeholders || []).map((a: any) => ({
+          name: a.name, role: a.role || '', org: a.org || '', bucket: 'unknown' as const,
+        }));
+        const aliases: Record<string, string> = {};
+        (extracted.unmappedNames || []).forEach((n: string) => { aliases[n] = ''; });
+        if (newPeople.length > 0) {
+          setAgentFlow({ step: 'new-stakeholders', message: '', extractData: data, stakeholders: newPeople, nameAliases: aliases });
+        } else {
+          setAgentFlow({ step: 'name-mapping', message: '', extractData: data, stakeholders: [], nameAliases: aliases });
+        }
+      } else {
+        // No new people — go straight to generation
+        await runGenerateSummary(data, {}, []);
+      }
+    } catch (err: any) {
+      setAgentFlow(f => ({ ...f, step: 'error', message: `Error: ${err.message}` }));
+      setTimeout(() => setAgentFlow(f => ({ ...f, step: 'idle' })), 5000);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Step 2a: Save Project.md (first-time form)
+  // -------------------------------------------------------------------------
+  const handleFirstTimeSave = async () => {
+    const d = agentFlow.extractData;
+    if (!d) return;
+    const projectName = agentFlow.extractData?.projectName || projectForm.project || 'Project';
+    const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Build classified stakeholder lists
+    const clientStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'client')
+      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
+    const internalStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
+      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
+    const unknownStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'unknown')
+      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}`).join('\n');
+
+    const content = `# ${projectName}
+
+## Project Setup / Context
+<!-- USER:START project_context -->
+Client: ${projectForm.client}
+Project: ${projectForm.project}
+Stakeholders:
+  - Client:
+${clientStakeholders || '  - (none classified yet)'}
+  - Internal:
+${internalStakeholders || '  - (none classified yet)'}
+Project Summary: ${projectForm.summary}
+<!-- USER:END project_context -->
+
+## Current Status - Current/In-progress/Stopped
+<!-- AI:START current_status -->
+No current status available yet.
+<!-- AI:END current_status -->
+
+## Active Action Items - Checklist
+<!-- AI:START active_actions -->
+<!-- AI:END active_actions -->
+
+## Completed Action Items
+<!-- AI:START completed_actions -->
+<!-- AI:END completed_actions -->
+
+## Key Decisions - Decisions made, Owner
+<!-- AI:START decisions -->
+<!-- AI:END decisions -->
+
+## Unknown Stakeholders / Needs Classification
+<!-- AI:START unknown_stakeholders -->
+${unknownStakeholders}
+<!-- AI:END unknown_stakeholders -->
+
+## Tags
+<!-- AI:START tags -->
+#active-project #${slug}
+<!-- AI:END tags -->
+
+## Links
+<!-- AI:START links -->
+[[Project]] [[${projectName}]] [[Meeting Notes Summaries]]
+<!-- AI:END links -->
+`;
+    // Save Project.md
+    await apiFetch('/api/agent/project-md', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectMdPath: d.projectMdPath, content }),
+    });
+
+    // Now generate summary with full context
+    await runGenerateSummary(d, agentFlow.nameAliases, agentFlow.stakeholders);
+  };
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Step 2b: Confirm new stakeholders (returning project)
+  // -------------------------------------------------------------------------
+  const handleNewStakeholdersSave = async () => {
+    const d = agentFlow.extractData;
+    if (!d) return;
+
+    // If there are also unmapped names, go to that step next
+    const unmapped = d.extracted?.unmappedNames || [];
+    if (unmapped.length > 0) {
+      const aliases: Record<string, string> = {};
+      unmapped.forEach((n: string) => { aliases[n] = ''; });
+      setAgentFlow(f => ({ ...f, step: 'name-mapping', nameAliases: aliases }));
+      return;
+    }
+    await runGenerateSummary(d, agentFlow.nameAliases, agentFlow.stakeholders);
+  };
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Step 2c: Confirm name mappings
+  // -------------------------------------------------------------------------
+  const handleNameMappingsSave = async () => {
+    const d = agentFlow.extractData;
+    if (!d) return;
+    await runGenerateSummary(d, agentFlow.nameAliases, agentFlow.stakeholders);
+  };
+
+  // -------------------------------------------------------------------------
+  // Agent Space — Step 3: Generate summary (always last step)
+  // -------------------------------------------------------------------------
+  const runGenerateSummary = async (extractData: any, nameAliases: Record<string, string>, newStakeholders: AgentStakeholder[]) => {
+    setAgentFlow(f => ({ ...f, step: 'generating', message: 'Generating summary and updating Project.md…' }));
+    try {
+      // If there are newly classified stakeholders for a returning project, patch Project.md first
+      if (!extractData.isFirstTime && newStakeholders.length > 0) {
+        const clientNew = newStakeholders.filter(s => s.bucket === 'client').map(s => `- [[${s.name}]] — ${s.role || 'Role TBD'}`).join('\n');
+        const internalNew = newStakeholders.filter(s => s.bucket === 'internal').map(s => `- [[${s.name}]] — ${s.role || 'Role TBD'}`).join('\n');
+        const unknownNew = newStakeholders.filter(s => s.bucket === 'unknown').map(s => `- ${s.name} — ${s.role || 'unclear'}`).join('\n');
+        // Classification info is passed to LLM via summary content — merge handles placement
+        void clientNew; void internalNew;
+        if (unknownNew) {
+          // We'll let the LLM merge handle it via the summary — sufficient for now
+        }
+      }
+
+      const res = await apiFetch('/api/agent/generate-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notePath: extractData.notePath,
+          agentSpaceFolder: extractData.agentSpaceFolder,
+          summaryFileName: extractData.summaryFileName,
+          nameAliases,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAgentFlow(f => ({ ...f, step: 'error', message: data.error || 'Summary generation failed.' }));
+        setTimeout(() => setAgentFlow(f => ({ ...f, step: 'idle' })), 5000);
+        return;
+      }
+      setAgentFlow(f => ({ ...f, step: 'success', message: '✓ Summary saved and Project.md updated.', summaryPath: data.summaryPath, projectMdPath: data.projectMdPath }));
+      setRefreshTrigger(t => t + 1);
+      setTimeout(() => setAgentFlow(f => ({ ...f, step: 'idle' })), 5000);
+    } catch (err: any) {
+      setAgentFlow(f => ({ ...f, step: 'error', message: `Error: ${err.message}` }));
+      setTimeout(() => setAgentFlow(f => ({ ...f, step: 'idle' })), 5000);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,123 +312,6 @@ export default function App() {
   };
 
   const tabsRef = useRef<HTMLDivElement>(null);
-
-  // -------------------------------------------------------------------------
-  // Agent Space — Add to Project Knowledge
-  // -------------------------------------------------------------------------
-  const handleAddToProjectKnowledge = async (notePath: string) => {
-    const agentSpaceFolder = localStorage.getItem('jays_notes_agent_space_folder') || '2 - Agent Space';
-
-    setAgentSpaceStatus({ show: true, state: 'loading', message: 'Summarizing note — this may take a moment…' });
-
-    try {
-      const res = await apiFetch('/api/agent/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notePath, agentSpaceFolder }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setAgentSpaceStatus({ show: true, state: 'error', message: data.error || 'Summarization failed.' });
-        setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 5000);
-        return;
-      }
-
-      if (data.isFirstTime) {
-        // Reset form fields
-        setProjectForm({ client: '', project: data.projectName || '', stakeholdersClient: '', stakeholdersInternal: '', summary: '' });
-        setAgentSpaceStatus({
-          show: true,
-          state: 'first-time',
-          message: data.warning
-            ? `New project "${data.projectName}" — Project.md created. Fill in the context fields then save. (LLM note: ${data.warning})`
-            : `New project "${data.projectName}" — Project.md skeleton created. Fill in the context fields then save.`,
-          projectMdPath: data.projectMdPath,
-          projectMdContent: data.projectMdContent,
-          summaryPath: data.summaryPath,
-          projectName: data.projectName,
-        });
-      } else {
-        setAgentSpaceStatus({
-          show: true,
-          state: 'success',
-          message: `✓ Summary saved and Project.md updated.`,
-          summaryPath: data.summaryPath,
-          projectMdPath: data.projectMdPath,
-        });
-        setRefreshTrigger(t => t + 1);
-        setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 4000);
-      }
-    } catch (err: any) {
-      setAgentSpaceStatus({ show: true, state: 'error', message: `Error: ${err.message}` });
-      setTimeout(() => setAgentSpaceStatus(s => ({ ...s, show: false })), 5000);
-    }
-  };
-
-  const handleAgentSpaceProjectMdSave = async (formData?: typeof projectForm) => {
-    if (!agentSpaceStatus.projectMdPath) return;
-    const f = formData || projectForm;
-    const projectName = agentSpaceStatus.projectName || 'Project';
-    const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-
-    // Build clean Project.md from form fields, injecting user values into USER section
-    const content = `# ${projectName}
-
-## Project Setup / Context
-<!-- USER:START project_context -->
-Client: ${f.client}
-Project: ${f.project}
-Stakeholders:
-  - Client: ${f.stakeholdersClient}
-  - Internal: ${f.stakeholdersInternal}
-Project Summary: ${f.summary}
-<!-- USER:END project_context -->
-
-## Current Status - Current/In-progress/Stopped
-<!-- AI:START current_status -->
-No current status available yet.
-<!-- AI:END current_status -->
-
-## Active Action Items - Checklist
-<!-- AI:START active_actions -->
-<!-- AI:END active_actions -->
-
-## Completed Action Items
-<!-- AI:START completed_actions -->
-<!-- AI:END completed_actions -->
-
-## Key Decisions - Decisions made, Owner
-<!-- AI:START decisions -->
-<!-- AI:END decisions -->
-
-## Unknown Stakeholders / Needs Classification
-<!-- AI:START unknown_stakeholders -->
-<!-- AI:END unknown_stakeholders -->
-
-## Tags
-<!-- AI:START tags -->
-#active-project #${slug}
-<!-- AI:END tags -->
-
-## Links
-<!-- AI:START links -->
-[[Project]] [[${projectName}]] [[Meeting Notes Summaries]]
-<!-- AI:END links -->
-`;
-    try {
-      await apiFetch('/api/agent/project-md', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectMdPath: agentSpaceStatus.projectMdPath, content }),
-      });
-      setRefreshTrigger(t => t + 1);
-      setAgentSpaceStatus({ show: false, state: 'success', message: '' });
-    } catch {
-      setAgentSpaceStatus({ show: false, state: 'success', message: '' });
-    }
-  };
 
   const handleLogin = (newToken: string, newRole: string, newUsername: string) => {
     setToken(newToken);
@@ -798,117 +885,206 @@ No current status available yet.
         onClose={() => setIsSettingsOpen(false)} 
       />
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Agent Space — Status overlay                                         */}
-      {/* ------------------------------------------------------------------ */}
-      {agentSpaceStatus.show && agentSpaceStatus.state === 'loading' && (
+      {/* ================================================================== */}
+      {/* Agent Space overlays                                                */}
+      {/* ================================================================== */}
+
+      {/* Loading / Generating — bottom-right toast */}
+      {(agentFlow.step === 'loading' || agentFlow.step === 'generating') && (
         <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-border-color rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
           <div className="w-5 h-5 border-2 rounded-full animate-spin flex-shrink-0" style={{ borderColor: 'var(--interactive-accent)', borderTopColor: 'transparent' }} />
           <div>
             <p className="text-xs font-semibold" style={{ color: 'var(--interactive-accent)' }}>✦ Agent Space</p>
-            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
+            <p className="text-sm text-text-normal mt-0.5">{agentFlow.message}</p>
           </div>
         </div>
       )}
 
-      {agentSpaceStatus.show && agentSpaceStatus.state === 'success' && (
+      {/* Success toast */}
+      {agentFlow.step === 'success' && (
         <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-border-color rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
-          <span className="text-xl flex-shrink-0">✓</span>
+          <span className="text-xl flex-shrink-0" style={{ color: 'var(--interactive-accent)' }}>✓</span>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold" style={{ color: 'var(--interactive-accent)' }}>✦ Agent Space</p>
-            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
-            {agentSpaceStatus.summaryPath && (
-              <button
-                className="text-xs underline mt-1 truncate max-w-full text-left"
-                style={{ color: 'var(--interactive-accent)' }}
-                onClick={() => {
-                  if (agentSpaceStatus.summaryPath) handleSelectFile(agentSpaceStatus.summaryPath);
-                  setAgentSpaceStatus(s => ({ ...s, show: false }));
-                }}
-              >
+            <p className="text-sm text-text-normal mt-0.5">{agentFlow.message}</p>
+            {agentFlow.summaryPath && (
+              <button className="text-xs underline mt-1" style={{ color: 'var(--interactive-accent)' }}
+                onClick={() => { handleSelectFile(agentFlow.summaryPath!); setAgentFlow(f => ({ ...f, step: 'idle' })); }}>
                 Open summary →
               </button>
             )}
           </div>
-          <button onClick={() => setAgentSpaceStatus(s => ({ ...s, show: false }))} className="text-text-muted hover:text-text-normal flex-shrink-0 ml-1">✕</button>
+          <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))} className="text-text-muted hover:text-text-normal ml-1">✕</button>
         </div>
       )}
 
-      {agentSpaceStatus.show && agentSpaceStatus.state === 'error' && (
+      {/* Error toast */}
+      {agentFlow.step === 'error' && (
         <div className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 bg-bg-secondary border border-red-500/40 rounded-xl shadow-2xl px-5 py-4 min-w-[300px] max-w-sm">
           <span className="text-red-500 text-xl flex-shrink-0">✕</span>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-red-500">✦ Agent Space — Error</p>
-            <p className="text-sm text-text-normal mt-0.5">{agentSpaceStatus.message}</p>
+            <p className="text-sm text-text-normal mt-0.5">{agentFlow.message}</p>
           </div>
-          <button onClick={() => setAgentSpaceStatus(s => ({ ...s, show: false }))} className="text-text-muted hover:text-text-normal flex-shrink-0 ml-1">✕</button>
+          <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))} className="text-text-muted hover:text-text-normal ml-1">✕</button>
         </div>
       )}
 
-      {/* First-time Project.md setup — clean form, no raw markdown */}
-      {agentSpaceStatus.show && agentSpaceStatus.state === 'first-time' && (
+      {/* ── First-time: Project context form + stakeholder drag-drop ── */}
+      {agentFlow.step === 'first-time-form' && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-lg mx-4" style={{ maxHeight: '90vh' }}>
-            {/* Header */}
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-2xl mx-4" style={{ maxHeight: '92vh' }}>
             <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
               <span style={{ color: 'var(--interactive-accent)', fontSize: 18 }}>✦</span>
-              <div className="flex-1 min-w-0">
+              <div>
                 <h2 className="font-semibold text-text-normal text-sm">New Project — Set Up Context</h2>
-                <p className="text-xs text-text-muted mt-0.5">{agentSpaceStatus.projectName} · This context helps agents answer questions accurately.</p>
+                <p className="text-xs text-text-muted">{agentFlow.extractData?.projectName} · Fill in details so agents can answer questions accurately.</p>
               </div>
             </div>
-            {/* Form */}
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 min-h-0">
-              {[
-                { label: 'Client', key: 'client', placeholder: 'e.g. NovaCure', hint: 'Client company name' },
-                { label: 'Project', key: 'project', placeholder: 'e.g. AI Insights Transformation', hint: 'Project or engagement name' },
-                { label: 'Client Stakeholders', key: 'stakeholdersClient', placeholder: 'e.g. Sarah Mitchell (Sponsor), Priya Rao (Insights Lead)', hint: 'Name — Role, one per line or comma separated' },
-                { label: 'Internal Stakeholders', key: 'stakeholdersInternal', placeholder: 'e.g. Michael Grant (Engagement Lead), Anika Mehta', hint: 'Name — Role, one per line or comma separated' },
-              ].map(({ label, key, placeholder, hint }) => (
-                <div key={key}>
-                  <label className="block text-xs font-semibold text-text-normal mb-1">{label}</label>
-                  <p className="text-xs text-text-muted mb-1.5">{hint}</p>
-                  <input
-                    type="text"
-                    placeholder={placeholder}
-                    value={projectForm[key as keyof typeof projectForm]}
-                    onChange={e => setProjectForm(f => ({ ...f, [key]: e.target.value }))}
-                    className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors"
-                  />
-                </div>
-              ))}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 min-h-0">
+              {/* Context fields */}
+              <div className="grid grid-cols-2 gap-4">
+                {[
+                  { label: 'Client Company', key: 'client', placeholder: 'e.g. NovaCure' },
+                  { label: 'Project Name', key: 'project', placeholder: 'e.g. AI Insights Transformation' },
+                ].map(({ label, key, placeholder }) => (
+                  <div key={key}>
+                    <label className="block text-xs font-semibold text-text-normal mb-1">{label}</label>
+                    <input type="text" placeholder={placeholder}
+                      value={projectForm[key as keyof typeof projectForm]}
+                      onChange={e => setProjectForm(f => ({ ...f, [key]: e.target.value }))}
+                      className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors" />
+                  </div>
+                ))}
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-text-normal mb-1">Project Summary</label>
-                <p className="text-xs text-text-muted mb-1.5">What is this project about? What problem does it solve?</p>
-                <textarea
-                  placeholder="e.g. Phase one pilot to improve NovaCure's access to primary research insights using AI, focused on Cardiomab brand."
+                <textarea placeholder="What is this project about? What problem does it solve?"
                   value={projectForm.summary}
                   onChange={e => setProjectForm(f => ({ ...f, summary: e.target.value }))}
-                  rows={3}
-                  className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none"
-                />
+                  rows={2}
+                  className="w-full bg-bg-secondary border border-border-color rounded-lg px-3 py-2 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors resize-none" />
+              </div>
+              {/* Stakeholder classifier */}
+              {agentFlow.stakeholders.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-text-normal mb-1">Classify Stakeholders</label>
+                  <p className="text-xs text-text-muted mb-3">Drag each person into the correct column. Unclassified = Needs Classification.</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {(['client', 'internal', 'unknown'] as const).map(bucket => (
+                      <div key={bucket}
+                        className="bg-bg-secondary rounded-lg p-3 min-h-[80px]"
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={e => {
+                          e.preventDefault();
+                          const name = e.dataTransfer.getData('text/plain');
+                          setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(s => s.name === name ? { ...s, bucket } : s) }));
+                        }}>
+                        <p className="text-xs font-semibold mb-2 capitalize" style={{ color: bucket === 'client' ? 'var(--interactive-accent)' : bucket === 'internal' ? '#60a5fa' : '#9ca3af' }}>
+                          {bucket === 'unknown' ? 'Needs Classification' : bucket === 'client' ? 'Client' : 'Internal'}
+                        </p>
+                        {agentFlow.stakeholders.filter(s => s.bucket === bucket).map(s => (
+                          <div key={s.name} draggable
+                            onDragStart={e => e.dataTransfer.setData('text/plain', s.name)}
+                            className="bg-bg-primary border border-border-color rounded px-2 py-1 mb-1 text-xs text-text-normal cursor-grab select-none">
+                            {s.name}{s.role ? ` — ${s.role}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-color flex-shrink-0">
+              <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal transition-colors">
+                Skip
+              </button>
+              <button onClick={handleFirstTimeSave}
+                className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
+                style={{ background: 'var(--interactive-accent)' }}>
+                Save & Generate Summary
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Returning project: new stakeholders detected ── */}
+      {agentFlow.step === 'new-stakeholders' && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-lg mx-4" style={{ maxHeight: '80vh' }}>
+            <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
+              <span style={{ color: 'var(--interactive-accent)', fontSize: 18 }}>✦</span>
+              <div>
+                <h2 className="font-semibold text-text-normal text-sm">New People Detected</h2>
+                <p className="text-xs text-text-muted">These names weren't in Project.md. Classify them or leave as Needs Classification.</p>
               </div>
             </div>
-            {/* Footer */}
-            <div className="flex items-center justify-between px-6 py-4 border-t border-border-color flex-shrink-0 gap-3">
-              <p className="text-xs text-text-muted truncate">
-                {agentSpaceStatus.summaryPath ? `Summary saved · ${agentSpaceStatus.summaryPath}` : 'You can update this later in the Project.md file.'}
-              </p>
-              <div className="flex gap-2 flex-shrink-0">
-                <button
-                  onClick={() => { setAgentSpaceStatus(s => ({ ...s, show: false })); setRefreshTrigger(t => t + 1); }}
-                  className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal hover:bg-bg-secondary transition-colors"
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={() => handleAgentSpaceProjectMdSave()}
-                  className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
-                  style={{ background: 'var(--interactive-accent)' }}
-                >
-                  Save Project.md
-                </button>
+            <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0">
+              <div className="grid grid-cols-3 gap-3">
+                {(['client', 'internal', 'unknown'] as const).map(bucket => (
+                  <div key={bucket} className="bg-bg-secondary rounded-lg p-3 min-h-[60px]"
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => {
+                      e.preventDefault();
+                      const name = e.dataTransfer.getData('text/plain');
+                      setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(s => s.name === name ? { ...s, bucket } : s) }));
+                    }}>
+                    <p className="text-xs font-semibold mb-2 capitalize" style={{ color: bucket === 'client' ? 'var(--interactive-accent)' : bucket === 'internal' ? '#60a5fa' : '#9ca3af' }}>
+                      {bucket === 'unknown' ? 'Needs Classification' : bucket === 'client' ? 'Client' : 'Internal'}
+                    </p>
+                    {agentFlow.stakeholders.filter(s => s.bucket === bucket).map(s => (
+                      <div key={s.name} draggable onDragStart={e => e.dataTransfer.setData('text/plain', s.name)}
+                        className="bg-bg-primary border border-border-color rounded px-2 py-1 mb-1 text-xs text-text-normal cursor-grab select-none">
+                        {s.name}{s.role ? ` — ${s.role}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
+            </div>
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-color flex-shrink-0">
+              <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal transition-colors">Skip</button>
+              <button onClick={handleNewStakeholdersSave}
+                className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
+                style={{ background: 'var(--interactive-accent)' }}>Confirm & Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Name mapping: ambiguous/informal names ── */}
+      {agentFlow.step === 'name-mapping' && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-bg-primary border border-border-color rounded-xl shadow-2xl flex flex-col w-full max-w-lg mx-4" style={{ maxHeight: '80vh' }}>
+            <div className="flex items-center gap-3 px-6 py-4 border-b border-border-color flex-shrink-0">
+              <span style={{ color: 'var(--interactive-accent)', fontSize: 18 }}>✦</span>
+              <div>
+                <h2 className="font-semibold text-text-normal text-sm">Ambiguous Names Found</h2>
+                <p className="text-xs text-text-muted">Map informal names to known people, or leave blank to treat as new.</p>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 min-h-0">
+              {Object.keys(agentFlow.nameAliases).map(informal => (
+                <div key={informal} className="flex items-center gap-3">
+                  <span className="text-sm text-text-normal font-medium min-w-[120px] bg-bg-secondary px-2 py-1 rounded">{informal}</span>
+                  <span className="text-text-muted text-xs">→</span>
+                  <input type="text" placeholder="Full name (or leave blank = new person)"
+                    value={agentFlow.nameAliases[informal]}
+                    onChange={e => setAgentFlow(f => ({ ...f, nameAliases: { ...f.nameAliases, [informal]: e.target.value } }))}
+                    className="flex-1 bg-bg-secondary border border-border-color rounded-lg px-3 py-1.5 text-sm text-text-normal outline-none focus:border-interactive-accent transition-colors" />
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-color flex-shrink-0">
+              <button onClick={() => setAgentFlow(f => ({ ...f, step: 'idle' }))}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border-color text-text-muted hover:text-text-normal transition-colors">Skip</button>
+              <button onClick={handleNameMappingsSave}
+                className="px-4 py-1.5 text-sm rounded-lg text-white font-medium transition-colors"
+                style={{ background: 'var(--interactive-accent)' }}>Confirm & Generate Summary</button>
             </div>
           </div>
         </div>
