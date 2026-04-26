@@ -60,6 +60,10 @@ export default function App() {
   const [templates, setTemplates] = useState<{ name: string, path: string, type: string }[]>([]);
   const [renamingTemplatePath, setRenamingTemplatePath] = useState<string | null>(null);
   const [renamingTemplateValue, setRenamingTemplateValue] = useState('');
+  const [pinnedTabs, setPinnedTabs] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('jays_notes_pinned_tabs') || '[]')); } catch { return new Set(); }
+  });
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   
   const [newPassword, setNewPassword] = useState('');
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -483,7 +487,13 @@ No current status available yet.
   const activeTab = tabs.find(t => t.id === activeTabId);
   const splitTab = tabs.find(t => t.id === splitTabId);
 
-  // Auto-scroll tab bar so active tab is always visible
+  // Close tab context menu on outside click
+  useEffect(() => {
+    if (!tabContextMenu) return;
+    const close = () => setTabContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [tabContextMenu]);
   useEffect(() => {
     if (!activeTabId || !tabsRef.current) return;
     // Small timeout lets React finish rendering the tab before we scroll
@@ -820,10 +830,44 @@ No current status available yet.
 
   const handleCloseTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    if (pinnedTabs.has(id)) return; // don't close pinned tabs via X button
     const newTabs = tabs.filter(t => t.id !== id);
     setTabs(newTabs);
     if (activeTabId === id) {
       setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
+    }
+  };
+
+  const handleTabContextMenu = (e: React.MouseEvent, tabId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTabContextMenu({ x: e.clientX, y: e.clientY, tabId });
+  };
+
+  const handleTabContextAction = (action: string, tabId: string) => {
+    setTabContextMenu(null);
+    if (action === 'rename') {
+      const tab = tabs.find(t => t.id === tabId);
+      if (tab?.path) { setEditingTabId(tabId); setEditingTabTitle(tab.title); }
+    } else if (action === 'close') {
+      if (!pinnedTabs.has(tabId)) {
+        const newTabs = tabs.filter(t => t.id !== tabId);
+        setTabs(newTabs);
+        if (activeTabId === tabId) setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
+      }
+    } else if (action === 'close-all') {
+      const keep = tabs.filter(t => pinnedTabs.has(t.id));
+      setTabs(keep);
+      setActiveTabId(keep.length > 0 ? keep[keep.length - 1].id : null);
+    } else if (action === 'close-others') {
+      const keep = tabs.filter(t => t.id === tabId || pinnedTabs.has(t.id));
+      setTabs(keep);
+      setActiveTabId(tabId);
+    } else if (action === 'pin') {
+      const next = new Set(pinnedTabs);
+      if (next.has(tabId)) next.delete(tabId); else next.add(tabId);
+      setPinnedTabs(next);
+      localStorage.setItem('jays_notes_pinned_tabs', JSON.stringify([...next]));
     }
   };
 
@@ -1135,6 +1179,33 @@ No current status available yet.
                 style={{ background: 'var(--interactive-accent)' }}>Confirm & Generate Summary</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Tab context menu */}
+      {tabContextMenu && (
+        <div
+          className="fixed z-[400] bg-bg-secondary border border-border-color rounded-lg shadow-xl py-1 min-w-[160px]"
+          style={{ top: tabContextMenu.y, left: tabContextMenu.x }}
+          onClick={e => e.stopPropagation()}
+        >
+          {[
+            { action: 'rename', label: 'Rename' },
+            { action: 'pin', label: pinnedTabs.has(tabContextMenu.tabId) ? 'Unpin' : 'Pin' },
+            null,
+            { action: 'close', label: 'Close' },
+            { action: 'close-others', label: 'Close Others' },
+            { action: 'close-all', label: 'Close All' },
+          ].map((item, i) => item === null ? (
+            <div key={i} className="border-t border-border-color my-1" />
+          ) : (
+            <button key={item.action}
+              className="w-full text-left px-4 py-1.5 text-sm text-text-normal hover:bg-interactive-hover hover:text-interactive-accent"
+              onClick={() => handleTabContextAction(item.action, tabContextMenu.tabId)}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -1609,11 +1680,12 @@ No current status available yet.
                     key={tab.id}
                     data-tabid={tab.id}
                     onClick={() => setActiveTabId(tab.id)}
+                    onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                     className={`group flex items-center gap-2 px-3 py-1.5 text-sm rounded-t-md min-w-[120px] max-w-[200px] cursor-pointer border-t border-l border-r flex-shrink-0 ${
                       activeTabId === tab.id 
                         ? 'bg-bg-primary border-border-color text-text-normal z-10' 
                         : 'bg-bg-secondary border-transparent text-text-muted hover:bg-bg-primary/50'
-                    }`}
+                    } ${pinnedTabs.has(tab.id) ? 'border-b-2 border-b-interactive-accent' : ''}`}
                   >
                     {tab.type === 'editor' && <FileText size={14} className={activeTabId === tab.id ? 'text-interactive-accent' : ''} />}
                     {tab.type === 'graph' && <Network size={14} className={activeTabId === tab.id ? 'text-interactive-accent' : ''} />}
@@ -1670,10 +1742,11 @@ No current status available yet.
             {/* Content Area */}
             <div className="flex-grow overflow-hidden relative">
               {!activeTab ? (
-                <div className="h-full w-full flex items-center justify-center text-text-muted">
+                <div className="h-full w-full flex items-center justify-center">
                   <div className="text-center">
-                    <div className="text-4xl mb-4 font-bold opacity-20">Jay's Notes</div>
-                    <p>Open a file or create a new one to start.</p>
+                    <img src="/logo.png" alt="Primal Notes" className="w-20 h-20 mx-auto mb-6 opacity-60 object-contain" />
+                    <div className="text-2xl font-bold text-text-normal mb-2">Welcome, {username || 'there'}</div>
+                    <p className="text-text-muted text-sm">Open a file from the sidebar or create a new one to get started.</p>
                   </div>
                 </div>
               ) : activeTab.type === 'admin' ? (
