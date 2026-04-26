@@ -1695,11 +1695,13 @@ Rules:
 - Use ONLY the raw note and project context provided. Do not invent facts.
 - If something is unclear, mark it as "unclear".
 - Summary length must be proportional to the input. Short note = short summary. Never pad.
-- If a section has nothing to put in it, write "None." Do not invent content.
-- No [[wikilinks]] anywhere in the output except the Links line at the bottom.
+- If a section has nothing, write "None." Do not invent content.
+- No [[wikilinks]] anywhere except the Links line at the bottom.
 - Use plain bold **Name** for people in Attendees and Action Items.
 - Use the project context to classify attendees as Client or Internal.
-- No ## heading for Tags or Links — they are plain inline lines at the bottom.
+- Attendees: Client on its own line, Internal on its own line — NEVER on the same line.
+- Open Questions go inside Action Items as the first sub-section ### Open Questions.
+- Tags: and Links: are plain lines at the bottom — NO ## heading, each on its OWN separate line.
 - No blank lines between bullets inside a section.
 - Return only valid markdown. No preamble or explanation.`;
 
@@ -1714,36 +1716,40 @@ ${noteContent}
 
 ---
 
-Produce the meeting summary using EXACTLY this template. Do not add, remove, or rename any section.
+Produce the meeting summary using EXACTLY this template. Every line break matters.
 
 # ${noteBaseName} — ${dateStr}
 **Source:** [[${noteBaseName}]]
 **Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
-**Client:** **Name** — Role, **Name** — Role
-**Internal:** **Name** — Role, **Name** — Role
-(One line for Client listing ALL client attendees comma-separated. One line for Internal listing ALL internal attendees comma-separated. Plain bold names, no [[wikilinks]]. Omit a line if no one in that group.)
+**Client:** Name — Role, Name — Role
+**Internal:** Name — Role, Name — Role
+
+(Client line and Internal line must be on SEPARATE lines. One line per group listing ALL members comma-separated. Plain bold names, no [[wikilinks]].)
 
 ## Discussion Summary
-(Group by THEME. Bold theme name on its own line, then 1-3 plain bullets below. No [[wikilinks]].)
+(Group by THEME. Bold theme name on its own line, then 1-3 plain bullets. No [[wikilinks]].)
 
 **Theme Name**
-- Key point or decision (plain text)
-
-## Open Questions
-(Only real unresolved questions. Omit section entirely if none.)
-- Question — Name who raised it
+- Key point or decision
 
 ## Action Items
+
+### Open Questions
+- Question — Name who raised it
+
 ### Internal
-- [ ] **Owner**: Task (Due: date or TBD)
+- [ ] **Name**: Task (Due: date or TBD)
 
 ### Client
-- [ ] **Owner**: Task (Due: date or TBD)
+- [ ] **Name**: Task (Due: date or TBD)
 
 Tags: #meetingsummary #${projectSlug}
-Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}`;
+Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
+
+(Tags line and Links line must be on SEPARATE lines. No ## heading for Tags or Links.)
+(Open Questions go INSIDE Action Items as the first sub-section.)`;
 
   let summaryContent: string;
   try {
@@ -1781,60 +1787,59 @@ Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}`;
   } catch { /* ignore */ }
 
   const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
-You receive the current Project.md and all meeting summaries. Update the Project.md based on the summaries.
+You receive the current Project.md and meeting summaries. Update ONLY the updatable sections.
 
-The Project.md has this exact structure — reproduce it with updates:
+EXACT OUTPUT STRUCTURE — every line break matters:
 
 # [Project Name]
-
+(blank line)
 ## Project Context
-Client: [client name — NEVER change this]
-Project: [project name — NEVER change this]
-**Client Stakeholders:** [comma-separated names — NEVER change this]
-**Internal Stakeholders:** [comma-separated names — NEVER change this]
-Project Summary: [summary — NEVER change this]
-
+Client: [value]
+**Client Stakeholders:** [comma-separated names]
+**Internal Stakeholders:** [comma-separated names]
+Project Summary: [value]
+(blank line)
 ## Current Status
-[1-2 sentences. Update based on latest meeting. No bullets.]
-
+[1-2 sentences. No bullets.]
+(blank line)
 ## Active Action Items
 - [ ] **Name**: Task (Due: date)
-[Add new items. Keep existing unchecked items. Move - [x] items to Completed.]
-
+(blank line)
 ## Completed Action Items
 - [x] **Name**: Task (Completed: date)
-[Only checked-off items here.]
-
+(blank line)
 ## Key Decisions
-- Decision description — **Owner**
-[Add new decisions. Keep existing ones. No duplicates.]
-
+- Decision — **Owner**
+(blank line)
 Tags: #tag1 #tag2 #tag3
-Links: [[ProjectName]] [[ClientName]]
+Links: [[Name1]] [[Name2]]
 
-ABSOLUTE RULES:
-1. Output ONLY the Project.md content — nothing else before or after.
-2. NEVER modify ## Project Context block — copy it character-for-character.
-3. No [[wikilinks]] except on the Links line.
-4. No blank lines between bullets within a section.
-5. No ## heading for Tags or Links — they stay as inline "Tags:" and "Links:" lines.
-6. No meeting summary content in the output — extract only what changed.
-7. Consolidate action items — no duplicates across meetings.
-8. Preserve - [x] checked items exactly.`;
+CRITICAL RULES:
+1. ## Project Context block: copy it EXACTLY character-for-character — every line on its OWN line, no merging.
+2. Client:, **Client Stakeholders:**, **Internal Stakeholders:**, Project Summary: must each be on their OWN separate line.
+3. Tags: and Links: must each be on their OWN separate line.
+4. No [[wikilinks]] except on the Links line.
+5. No blank lines between bullets within a section.
+6. No meeting summary content in output.
+7. Consolidate action items — no duplicates.
+8. Preserve - [x] checked items exactly.
+9. Output ONLY the Project.md. Nothing before or after.`;
 
   const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
 
 ---
 
-## Meeting Summaries (read to update Project.md — do NOT include in output)
+## Meeting Summaries (use to update — do NOT include in output)
 ${allSummariesContent}
 
 ---
 
-Output the updated Project.md only. Keep ## Project Context exactly as-is.
-Tags line: Tags: #active-project #${projectSlug} [add relevant tags from meetings]
-Links line: Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}`;
+Rules for this update:
+- Copy ## Project Context exactly as-is — every field on its own line.
+- Tags line (its own line): Tags: #active-project #${projectSlug} [add relevant tags]
+- Links line (its own line, after Tags): Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
+- Output ONLY the updated Project.md.`;
 
   try {
     const updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
