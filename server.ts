@@ -1460,43 +1460,20 @@ function deriveMirrorPaths(notePath: string, agentSpaceRoot: string) {
 function buildSkeletonProjectMd(projectName: string): string {
   return `# ${projectName}
 
+## Project Setup / Context
+<!-- USER:START project_context -->
+Client: 
+Project: 
+Stakeholders:
+  - Client: 
+  - Internal: 
+Project Summary: 
+<!-- USER:END project_context -->
+
 ## Current Status - Current/In-progress/Stopped
 <!-- AI:START current_status -->
 No current status available yet.
 <!-- AI:END current_status -->
-
-## Project Description
-<!-- AI:START project_description -->
-<!-- AI:END project_description -->
-
-## Stakeholders
-<!-- AI:START stakeholders -->
-### Client
-<!-- e.g. - Jane Doe (Sponsor) -->
-
-### Internal
-<!-- e.g. - John Smith (Engagement Lead) -->
-<!-- AI:END stakeholders -->
-
-## Unknown Stakeholders / Needs Classification
-<!-- AI:START unknown_stakeholders -->
-<!-- AI:END unknown_stakeholders -->
-
-## Discussion Items
-<!-- AI:START discussion_items -->
-<!-- AI:END discussion_items -->
-
-## Key Decisions - Decisions made, Owner
-<!-- AI:START decisions -->
-<!-- AI:END decisions -->
-
-## Open Questions
-<!-- AI:START open_questions -->
-<!-- AI:END open_questions -->
-
-## Next Steps
-<!-- AI:START next_steps -->
-<!-- AI:END next_steps -->
 
 ## Active Action Items - Checklist
 <!-- AI:START active_actions -->
@@ -1506,9 +1483,17 @@ No current status available yet.
 <!-- AI:START completed_actions -->
 <!-- AI:END completed_actions -->
 
+## Key Decisions - Decisions made, Owner
+<!-- AI:START decisions -->
+<!-- AI:END decisions -->
+
+## Unknown Stakeholders / Needs Classification
+<!-- AI:START unknown_stakeholders -->
+<!-- AI:END unknown_stakeholders -->
+
 ## Tags
 <!-- AI:START tags -->
-#active-project #${projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')} 
+#active-project #${projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}
 <!-- AI:END tags -->
 
 ## Links
@@ -1576,19 +1561,15 @@ app.post('/api/agent/summarize', authHeaderOnly, async (req: any, res) => {
   const summarizeSystemPrompt = `You are a project memory assistant for a markdown notes app.
 Your job is to convert a raw meeting note into a clean, structured meeting summary.
 
-Important principles:
-- Do not invent facts.
-- Use only the raw note and the project context provided.
-- If something is unclear, mark it as unclear.
-- Create useful [[wikilinks]] for clients, projects, people, deliverables, decisions, workstreams, and recurring concepts.
+Rules:
+- Use ONLY the raw note and project context provided. Do not invent facts.
+- If something is unclear, mark it as "unclear".
+- Summary length must be proportional to the input — a short note gets a short summary. Never pad.
+- If a section has nothing to put in it, write "None." Do not invent content to fill it.
+- Use [[wikilinks]] for people, clients, projects, deliverables, and recurring concepts.
 - Use #tags for classification and search.
-- Do not create research sections.
-- Do not perform external research.
-- Separate client stakeholders, internal senior stakeholders, internal project team, and unknown stakeholders.
-- If the project context lists stakeholders, use it to classify people.
-- If a person is not listed in project context, place them under Unknown / Needs Classification.
-- Classify the meeting type and importance.
-- Return only valid markdown.`;
+- Use the project context stakeholder list to classify attendees. Anyone not listed goes under Unknown.
+- Return only valid markdown. No preamble or explanation.`;
 
   const summarizeUserPrompt = `${projectContext}
 
@@ -1600,34 +1581,25 @@ ${noteContent}
 
 ---
 
-Produce a structured meeting summary in valid markdown using this format:
+Produce the meeting summary using EXACTLY this template. Be concise — every bullet must earn its place.
+Do not add sections. Do not rename sections. Do not pad thin content.
 
 # ${noteBaseName} — ${dateStr}
-**Source:** [[${notePath}]]
-**Meeting Type:** (e.g. Client Workshop / Internal Sync / Stakeholder Review)
-**Importance:** (High / Medium / Low)
+**Source:** [[${noteBaseName}]]
+**Meeting Type:** (Client Workshop / Internal Sync / Stakeholder Review / Discovery / Other)
 
 ## Attendees
-### Client Stakeholders
-- [[Name]] — Role
+**Client:** [[Name]] — Role, [[Name]] — Role
+**Internal:** [[Name]] — Role, [[Name]] — Role
+**Unknown:** Name — context clue (omit line if none)
 
-### Internal Senior Stakeholders
-- [[Name]] — Role
+## Discussion Summary
+(One bullet per topic. Fold decisions into the relevant topic bullet. No sub-bullets.)
+- **[[Topic]]:** key point and any decision made
 
-### Internal Project Team
-- [[Name]] — Role
-
-### Unknown / Needs Classification
-- Name — context clue if any
-
-## Key Context
-- Why this meeting happened and what the situation was going in (2-4 bullets max)
-
-## Decisions Made
-- [[Decision or outcome]] — Owner — any conditions or caveats
-
-## Discussion Highlights
-- **[[Topic]]:** key point or outcome (one bullet per topic)
+## Open Questions
+(Only real unresolved questions from the note. Omit section if none.)
+- Question — [[Name who raised it]]
 
 ## Action Items
 ### Internal
@@ -1636,15 +1608,11 @@ Produce a structured meeting summary in valid markdown using this format:
 ### Client
 - [ ] [[Owner]]: Task (Due: date or TBD)
 
-## Open Questions
-- Question — raised by [[Name]]
-
-## Key Quotes / Non-Negotiables
-(Only include if a named person stated a hard requirement or critical position)
-- "Quote" — [[Name]]
-
 ## Tags
-#meetingsummary #tag2 #tag3`;
+#meetingsummary #${projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}
+
+## Links
+[[${projectName}]]`;
 
   let summaryContent: string;
   try {
@@ -1684,22 +1652,22 @@ You will receive:
 2. All meeting summaries for the project
 
 Your job:
-- Update the AI-managed sections of Project.md (those between <!-- AI:START --> and <!-- AI:END --> markers).
-- Preserve all USER-managed sections exactly as-is (sections without AI markers).
+- Update ONLY sections marked with <!-- AI:START --> and <!-- AI:END --> markers.
+- NEVER touch sections marked with <!-- USER:START --> and <!-- USER:END --> — these are user-managed, preserve them character-for-character.
 - Preserve user-checked completed action items (lines with - [x]).
 - Consolidate action items across meetings — do not duplicate action items.
 - Do not invent facts.
 - Use [[wikilinks]] for clients, projects, people, deliverables, workstreams, and recurring concepts.
 - Use #tags for classification.
-- Client-facing and high-importance meetings should influence Current Status, Decisions, and Key Context more heavily.
-- Internal daily check-ins should mainly influence action items and execution details.
-- Do not let low-importance internal syncs overwrite major client decisions.
+- Client-facing and high-importance meetings should influence Current Status and Decisions more heavily.
+- Internal check-ins should mainly influence action items — do not let them overwrite major client decisions.
 - Keep each AI-managed section concise — bullet points only, no prose paragraphs.
 - Return only the full updated Project.md markdown. No preamble or explanation.
 
 CRITICAL MARKER RULES:
-- Every <!-- AI:START section_name --> and <!-- AI:END section_name --> marker must be preserved exactly.
-- Only write content between the markers — never touch the markers or headings themselves.
+- Every <!-- AI:START section --> and <!-- AI:END section --> marker must be preserved exactly.
+- Every <!-- USER:START section --> and <!-- USER:END section --> marker and all content between them must be preserved exactly.
+- Only write new content between AI markers — never between USER markers.
 - Do NOT copy full meeting summaries into Project.md — extract only decisions, actions, status changes, and new stakeholders.`;
 
     const mergeUserPrompt = `## Current Project.md
