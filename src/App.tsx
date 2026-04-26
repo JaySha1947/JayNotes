@@ -1744,7 +1744,7 @@ No current status available yet.
               {!activeTab ? (
                 <div className="h-full w-full flex items-center justify-center">
                   <div className="text-center">
-                    <img src="/logo.png" alt="Primal Notes" className="w-20 h-20 mx-auto mb-6 opacity-60 object-contain" />
+                    <img src="/logo.png" alt="Primal Notes" className="w-72 h-72 mx-auto mb-6 opacity-60 object-contain" />
                     <div className="text-2xl font-bold text-text-normal mb-2">Welcome, {username || 'there'}</div>
                     <p className="text-text-muted text-sm">Open a file from the sidebar or create a new one to get started.</p>
                   </div>
