@@ -1503,22 +1503,46 @@ No current status available yet.
 // Agent Space Routes
 // =============================================================================
 
-// Helper: parse known stakeholders from Project.md content
+// Helper: parse known stakeholders from Project.md content — robust multi-format parser
 function parseKnownStakeholders(projectMdContent: string): string[] {
-  const names: string[] = [];
-  // Extract names from USER:START project_context block
+  const names: Set<string> = new Set();
+
+  // 1. Extract from USER:START project_context block — handles "  - Name — Role" format
   const contextMatch = projectMdContent.match(/<!-- USER:START project_context -->([\s\S]*?)<!-- USER:END project_context -->/);
   if (contextMatch) {
-    const lines = contextMatch[1].split('\n');
-    for (const line of lines) {
-      const m = line.match(/[-•]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
-      if (m) names.push(m[1].trim());
+    const block = contextMatch[1];
+    // Match lines like: "  - Name — Role", "  - Name (org)", "  Name — role", "Name — role"
+    const linePattern = /^\s*[-•]?\s*([A-Z][a-záéíóú]*(?:\s+[A-Z][a-záéíóú]*)+)(?:\s*[—\-–]|\s*\()/gm;
+    let m;
+    while ((m = linePattern.exec(block)) !== null) {
+      const name = m[1].trim();
+      if (name.length > 2 && !['Client', 'Internal', 'Project', 'Stakeholders'].includes(name)) {
+        names.add(name);
+      }
+    }
+    // Also match plain "Name — role" on lines under Client:/Internal: headers
+    const plainName = /^\s{2,}([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/gm;
+    while ((m = plainName.exec(block)) !== null) {
+      const name = m[1].trim();
+      if (!['Client', 'Internal', 'Project', 'Stakeholders', 'Summary'].includes(name)) {
+        names.add(name);
+      }
     }
   }
-  // Also extract [[wikilinks]] which are names
-  const wikiMatches = projectMdContent.matchAll(/\[\[([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\]\]/g);
-  for (const m of wikiMatches) names.push(m[1]);
-  return [...new Set(names)];
+
+  // 2. Extract from AI sections — look for **Name** bold pattern (used in action items/decisions)
+  const boldNames = projectMdContent.matchAll(/\*\*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\*\*/g);
+  for (const m of boldNames) names.add(m[1]);
+
+  // 3. Also scan meeting summary files content embedded in Project.md (if any leaked in)
+  // by looking for "[[Name]]" wikilinks which may exist in links section
+  const wikiNames = projectMdContent.matchAll(/\[\[([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\]\]/g);
+  for (const m of wikiNames) {
+    const n = m[1];
+    if (!['Project', 'Meeting Notes Summaries'].includes(n)) names.add(n);
+  }
+
+  return [...names];
 }
 
 // POST /api/agent/extract
@@ -1705,7 +1729,7 @@ Produce the meeting summary using EXACTLY this template:
 ## Attendees
 **Client:** **Name** — Role, **Name** — Role
 **Internal:** **Name** — Role, **Name** — Role
-(Client on one line, Internal on one line. Use plain bold for names — no [[wikilinks]].)
+(Exactly two lines: one Client line listing ALL client attendees comma-separated, one Internal line listing ALL internal attendees. Use plain bold for names — no [[wikilinks]]. Omit Unknown line if none.)
 
 ## Discussion Summary
 Group bullets by THEME. Bold theme heading on its own line, then 1-3 plain bullets below.
@@ -1763,42 +1787,35 @@ Do NOT use [[wikilinks]] here. Plain bold for theme names only.
   const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
 You will receive the existing Project.md and all meeting summaries for the project.
 
-Rules:
-- Update ONLY sections marked with <!-- AI:START --> and <!-- AI:END --> markers.
-- NEVER touch sections marked with <!-- USER:START --> and <!-- USER:END --> — preserve them character-for-character.
-- Preserve user-checked completed action items (lines with - [x]).
-- Consolidate action items across meetings — do not duplicate.
-- Do not invent facts. Use #tags in the tags section only.
-- NO [[wikilinks]] anywhere — use plain bold **Name** for people in action items and decisions.
-- Client-facing and high-importance meetings influence Current Status and Decisions more heavily.
-- Internal check-ins only influence action items.
-- Keep AI sections concise — bullet points only, no blank lines between bullets.
-- No extra blank lines inside sections — keep content tight.
-- Return only the full updated Project.md. No preamble.
+Your job is to UPDATE the AI-managed sections of Project.md with synthesized information from the summaries.
 
-FORMATTING RULES:
-- active_actions: use "- [ ] **Name**: Task (Due: date)" — plain bold, no [[links]]
-- completed_actions: use "- [x] **Name**: Task (Completed: date)"
-- decisions: use "- Decision description — **Owner**"
-- current_status: 1-2 sentences max, no bullet points
-- tags: #tags only, no [[links]]
-
-MARKER RULES:
-- Preserve every <!-- AI:START --> and <!-- AI:END --> marker exactly.
-- Preserve every <!-- USER:START --> and <!-- USER:END --> marker and all content between them exactly.
-- Do NOT copy full summaries into Project.md — extract only decisions, actions, status changes.`;
+ABSOLUTE RULES — violations will break the system:
+1. The output must contain ONLY the Project.md content — do NOT append meeting summaries, do NOT add any section called "All Meeting Summaries" or "Meeting Summary" to the output.
+2. Update ONLY sections between <!-- AI:START --> and <!-- AI:END --> markers.
+3. NEVER touch sections between <!-- USER:START --> and <!-- USER:END --> — copy them character-for-character.
+4. Preserve user-checked items (- [x]) exactly.
+5. Do NOT use [[wikilinks]] anywhere — use plain **bold** for names only.
+6. No blank lines between bullet points inside a section.
+7. No extra blank lines between sections beyond what exists in the template.
+8. active_actions format: - [ ] **Name**: Task (Due: date)
+9. completed_actions format: - [x] **Name**: Task (Completed: date)
+10. decisions format: - Decision description — **Owner**
+11. current_status: 1-2 sentences only, no bullet points, no blank lines
+12. tags: #tags only, one line, space-separated
+13. Consolidate action items — do not duplicate across meetings
+14. Return ONLY the complete updated Project.md. No explanation, no preamble, nothing after the last line.`;
 
   const mergeUserPrompt = `## Current Project.md
 ${projectMdContent}
 
 ---
 
-## All Meeting Summaries
+## Meeting Summaries (use to UPDATE Project.md — do NOT copy into output)
 ${allSummariesContent}
 
 ---
 
-Return the full updated Project.md. Preserve all markers. Bullet points only in AI sections.`;
+Return the updated Project.md ONLY. No meeting summary content in the output.`;
 
   try {
     const updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);

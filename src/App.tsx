@@ -152,11 +152,11 @@ export default function App() {
     const projectName = agentFlow.extractData?.projectName || projectForm.project || 'Project';
     const slug = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-    // Build classified stakeholder lists — plain text, no [[links]]
+    // Build classified stakeholder lists — one line each
     const clientStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'client')
-      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
+      .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
     const internalStakeholders = agentFlow.stakeholders.filter(s => s.bucket === 'internal')
-      .map(s => `  - ${s.name}${s.role ? ' — ' + s.role : ''}${s.org ? ' (' + s.org + ')' : ''}`).join('\n');
+      .map(s => `${s.name}${s.role ? ' — ' + s.role : ''}`).join(', ');
 
     const content = `# ${projectName}
 
@@ -165,10 +165,8 @@ export default function App() {
 Client: ${projectForm.client}
 Project: ${projectForm.project}
 Stakeholders:
-  Client:
-${clientStakeholders || '  - (none classified yet)'}
-  Internal:
-${internalStakeholders || '  - (none classified yet)'}
+  Client: ${clientStakeholders || '(none classified yet)'}
+  Internal: ${internalStakeholders || '(none classified yet)'}
 Project Summary: ${projectForm.summary}
 <!-- USER:END project_context -->
 
