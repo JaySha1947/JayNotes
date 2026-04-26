@@ -1754,6 +1754,10 @@ Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
   let summaryContent: string;
   try {
     summaryContent = await callOpenRouter(summarizeSystemPrompt, summarizeUserPrompt);
+    // Defensive: ensure Tags and Links are always on separate lines
+    summaryContent = summaryContent
+      .replace(/\bTags:([^\n]+)\s+Links:/g, 'Tags:$1\nLinks:')
+      .replace(/\bLinks:([^\n]+)\s+Tags:/g, 'Tags:\nLinks:$1');
   } catch (err: any) {
     console.error('[agent/generate-summary] summary LLM failed:', err.message);
     return res.status(502).json({ error: `Summary generation failed: ${err.message}` });
@@ -1786,47 +1790,54 @@ Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
     }
   } catch { /* ignore */ }
 
-  const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
-You receive the current Project.md and meeting summaries. Update ONLY the updatable sections.
+  // Extract the Project Context block BEFORE passing to LLM.
+  // We re-inject it verbatim after LLM runs so it can never be reformatted.
+  const projectContextMatch = projectMdContent.match(/(## Project Context\n[\s\S]*?\n\n)/);
+  const projectContextBlock = projectContextMatch ? projectContextMatch[1] : null;
 
-EXACT OUTPUT STRUCTURE — every line break matters:
+  // Strip Project Context from what we show LLM — it only sees updatable sections
+  const projectMdForLLM = projectContextBlock
+    ? projectMdContent.replace(projectContextBlock, '## Project Context\n[PRESERVED — DO NOT MODIFY]\n\n')
+    : projectMdContent;
+
+  const mergeSystemPrompt = `You are a project memory assistant updating a living Project.md file.
+You receive the current Project.md (with Project Context redacted) and meeting summaries.
+Update ONLY the sections below Project Context.
+
+EXACT OUTPUT STRUCTURE:
 
 # [Project Name]
-(blank line)
+
 ## Project Context
-Client: [value]
-**Client Stakeholders:** [comma-separated names]
-**Internal Stakeholders:** [comma-separated names]
-Project Summary: [value]
-(blank line)
+[PRESERVED — DO NOT MODIFY]
+
 ## Current Status
 [1-2 sentences. No bullets.]
-(blank line)
+
 ## Active Action Items
 - [ ] **Name**: Task (Due: date)
-(blank line)
+
 ## Completed Action Items
 - [x] **Name**: Task (Completed: date)
-(blank line)
+
 ## Key Decisions
 - Decision — **Owner**
-(blank line)
-Tags: #tag1 #tag2 #tag3
+
+Tags: #tag1 #tag2
 Links: [[Name1]] [[Name2]]
 
-CRITICAL RULES:
-1. ## Project Context block: copy it EXACTLY character-for-character — every line on its OWN line, no merging.
-2. Client:, **Client Stakeholders:**, **Internal Stakeholders:**, Project Summary: must each be on their OWN separate line.
-3. Tags: and Links: must each be on their OWN separate line.
-4. No [[wikilinks]] except on the Links line.
-5. No blank lines between bullets within a section.
-6. No meeting summary content in output.
-7. Consolidate action items — no duplicates.
-8. Preserve - [x] checked items exactly.
-9. Output ONLY the Project.md. Nothing before or after.`;
+RULES:
+1. Output the FULL file — keep [PRESERVED — DO NOT MODIFY] as a placeholder, it will be replaced.
+2. Tags: on its own line. Links: on its own line immediately after Tags.
+3. No [[wikilinks]] except on Links line.
+4. No blank lines between bullets within a section.
+5. No meeting summary content in output.
+6. Consolidate action items — no duplicates.
+7. Preserve - [x] checked items.
+8. Output ONLY the Project.md. Nothing before or after.`;
 
   const mergeUserPrompt = `## Current Project.md
-${projectMdContent}
+${projectMdForLLM}
 
 ---
 
@@ -1835,14 +1846,23 @@ ${allSummariesContent}
 
 ---
 
-Rules for this update:
-- Copy ## Project Context exactly as-is — every field on its own line.
-- Tags line (its own line): Tags: #active-project #${projectSlug} [add relevant tags]
-- Links line (its own line, after Tags): Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
-- Output ONLY the updated Project.md.`;
+Tags line: Tags: #active-project #${projectSlug} [add relevant tags from meetings, space-separated]
+Links line (immediately after Tags, its own line): Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}
+Output the full updated Project.md.`;
 
   try {
-    const updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
+    let updatedProjectMd = await callOpenRouter(mergeSystemPrompt, mergeUserPrompt);
+    // Re-inject the original Project Context block verbatim
+    if (projectContextBlock) {
+      updatedProjectMd = updatedProjectMd.replace(
+        /## Project Context\n\[PRESERVED[^\n]*\]\n*/,
+        projectContextBlock
+      );
+    }
+    // Ensure Tags and Links are always on separate lines (defensive fix)
+    updatedProjectMd = updatedProjectMd
+      .replace(/\bTags:([^\n]+)\s+Links:/g, 'Tags:$1\nLinks:')
+      .replace(/\bLinks:([^\n]+)\s+Tags:/g, 'Tags:\nLinks:$1');
     fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
   } catch (err: any) {
     console.error('[agent/generate-summary] Project.md merge failed:', err.message);

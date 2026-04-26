@@ -945,27 +945,32 @@ Links: [[${projectName}]]${clientName ? ` [[${clientName}]]` : ''}
               {agentFlow.stakeholders.length > 0 && (
                 <div>
                   <label className="block text-xs font-semibold text-text-normal mb-1">Classify Stakeholders</label>
-                  <p className="text-xs text-text-muted mb-3">Drag each person into the correct column. Unclassified = Needs Classification.</p>
-                  <div className="grid grid-cols-3 gap-3">
-                    {(['client', 'internal', 'unknown'] as const).map(bucket => (
-                      <div key={bucket}
-                        className="bg-bg-secondary rounded-lg p-3 min-h-[80px]"
-                        onDragOver={e => e.preventDefault()}
-                        onDrop={e => {
-                          e.preventDefault();
-                          const name = e.dataTransfer.getData('text/plain');
-                          setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(s => s.name === name ? { ...s, bucket } : s) }));
-                        }}>
-                        <p className="text-xs font-semibold mb-2 capitalize" style={{ color: bucket === 'client' ? 'var(--interactive-accent)' : bucket === 'internal' ? '#60a5fa' : '#9ca3af' }}>
-                          {bucket === 'unknown' ? 'Needs Classification' : bucket === 'client' ? 'Client' : 'Internal'}
-                        </p>
-                        {agentFlow.stakeholders.filter(s => s.bucket === bucket).map(s => (
-                          <div key={s.name} draggable
-                            onDragStart={e => e.dataTransfer.setData('text/plain', s.name)}
-                            className="bg-bg-primary border border-border-color rounded px-2 py-1 mb-1 text-xs text-text-normal cursor-grab select-none">
-                            {s.name}{s.role ? ` — ${s.role}` : ''}
-                          </div>
-                        ))}
+                  <p className="text-xs text-text-muted mb-3">Click to classify. Click the name to rename if it was mis-identified.</p>
+                  <div className="space-y-2">
+                    {agentFlow.stakeholders.map(s => (
+                      <div key={s.name} className="flex items-center gap-2 bg-bg-secondary rounded-lg px-3 py-2">
+                        {/* Editable name */}
+                        <input
+                          type="text"
+                          value={s.name}
+                          onChange={e => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, name: e.target.value } : st) }))}
+                          className="min-w-0 w-32 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                        />
+                        {s.role && <span className="text-xs text-text-muted flex-shrink-0">— {s.role}</span>}
+                        <div className="flex gap-1.5 ml-auto flex-shrink-0">
+                          {(['client', 'internal', 'unknown'] as const).map(bucket => (
+                            <button key={bucket}
+                              onClick={() => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map(st => st.name === s.name ? { ...st, bucket } : st) }))}
+                              className="px-2 py-0.5 text-xs rounded border transition-colors"
+                              style={{
+                                borderColor: s.bucket === bucket ? 'var(--interactive-accent)' : 'var(--border-color)',
+                                background: s.bucket === bucket ? 'var(--interactive-accent)' : 'transparent',
+                                color: s.bucket === bucket ? 'white' : 'var(--text-muted)',
+                              }}>
+                              {bucket === 'unknown' ? 'Unclassified' : bucket === 'client' ? 'Client' : 'Internal'}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     ))}
                   </div>
