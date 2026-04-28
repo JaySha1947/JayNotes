@@ -1493,7 +1493,7 @@ No current status available yet.
 ## Key Decisions
 (none yet)
 
-**Tags:** #active-project #${slug}
+**Tags:** #${slug}
 
 **Links:** [[${projectName}]]
 `;
@@ -1887,7 +1887,7 @@ ${allSummariesContent}
 ---
 
 Output the updated Project.md.
-**Tags:** line: **Tags:** #active-project #${projectSlug} [space-separated tags from meetings]
+**Tags:** line: **Tags:** #${projectSlug} [additional space-separated #hashtags based on the broad topics seen across this project — e.g. #research #analytics #strategy. Use lowercase, no spaces in tags. Generate 2-5 topical tags. Do NOT include #active-project.]
 **Links:** line (blank line after Tags, then Links): **Links:** [[${projectFileName.replace('.md', '')}]] [[${clientName || projectName}]]${summaryFileNames.slice(-3).map(f => ` [[${f}]]`).join('')}`;
 
   try {
@@ -1909,6 +1909,17 @@ Output the updated Project.md.
       .replace(/([^\n])\n(\*\*Tags:\*\*)/g, '$1\n\n$2')
       .replace(/([^\n])\n(\*\*Links:\*\*)/g, '$1\n\n$2')
       .replace(/(\*\*Tags:\*\*[^\n]+)\n(\*\*Links:\*\*)/g, '$1\n\n$2');
+
+    // Normalize tags line: ensure each tag starts with # and is space-separated.
+    // Also strip any accidental #active-project that the LLM may still include.
+    updatedProjectMd = updatedProjectMd.replace(/\*\*Tags:\*\*([^\n]+)/g, (_match, tagsPart) => {
+      const tags = tagsPart
+        .trim()
+        .split(/\s+/)
+        .map((t: string) => t.startsWith('#') ? t : `#${t}`)
+        .filter((t: string) => t.length > 1 && t !== '#active-project' && /^#[a-zA-Z][a-zA-Z0-9_-]*$/.test(t));
+      return `**Tags:** ${tags.join(' ')}`;
+    });
 
     fs.writeFileSync(projectMdAbsPath, updatedProjectMd, 'utf-8');
   } catch (err: any) {

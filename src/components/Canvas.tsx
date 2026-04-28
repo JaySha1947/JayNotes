@@ -658,23 +658,58 @@ const LinkNode = ({ data, selected, id, width, height }: NodeProps<any>) => {
         }
       />
       
-      <div className="flex-grow overflow-hidden bg-white rounded-b-lg relative">
-        <div style={{ 
-          width: `${100 / zoom}%`, 
-          height: `${100 / zoom}%`, 
-          transform: `scale(${zoom})`, 
-          transformOrigin: 'top left',
-          position: 'absolute',
-          top: 0,
-          left: 0
-        }}>
-          <iframe 
-            src={`/api/proxy/iframe?url=${encodeURIComponent(data.url as string)}&token=${localStorage.getItem('jays_notes_token') || ''}`}
-            className="w-full h-full border-none pointer-events-none group-hover:pointer-events-auto" 
-            title="Web Embed"
-            referrerPolicy="no-referrer"
-          />
-        </div>
+      <WebPageIframeBody url={data.url as string} zoom={zoom} />
+    </div>
+  );
+};
+
+const WebPageIframeBody = ({ url, zoom }: { url: string; zoom: number }) => {
+  const [proxyOk, setProxyOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    // Probe the proxy with a HEAD-like fetch to detect disabled state without loading a full page
+    fetch(`/api/proxy/iframe?url=${encodeURIComponent(url)}&token=${localStorage.getItem('jays_notes_token') || ''}`, { method: 'HEAD' })
+      .then(r => setProxyOk(r.ok))
+      .catch(() => setProxyOk(false));
+  }, [url]);
+
+  if (proxyOk === false) {
+    return (
+      <div className="flex-grow flex flex-col items-center justify-center bg-bg-secondary rounded-b-lg gap-3 p-4 text-center">
+        <span style={{ fontSize: 28 }}>🔒</span>
+        <p className="text-sm font-medium text-text-normal">Web preview unavailable</p>
+        <p className="text-xs text-text-muted max-w-[260px]">
+          The iframe proxy is disabled on this server. Set <code className="bg-bg-primary px-1 rounded">ENABLE_IFRAME_PROXY=true</code> in your environment to enable web previews.
+        </p>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs px-3 py-1.5 rounded-lg border border-border-color text-text-normal hover:text-interactive-accent hover:border-interactive-accent transition-colors mt-1"
+        >
+          Open in browser ↗
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-grow overflow-hidden bg-white rounded-b-lg relative">
+      <div style={{
+        width: `${100 / zoom}%`,
+        height: `${100 / zoom}%`,
+        transform: `scale(${zoom})`,
+        transformOrigin: 'top left',
+        position: 'absolute',
+        top: 0,
+        left: 0
+      }}>
+        <iframe
+          src={`/api/proxy/iframe?url=${encodeURIComponent(url)}&token=${localStorage.getItem('jays_notes_token') || ''}`}
+          className="w-full h-full border-none pointer-events-none group-hover:pointer-events-auto"
+          title="Web Embed"
+          referrerPolicy="no-referrer"
+        />
       </div>
     </div>
   );
@@ -1301,6 +1336,8 @@ const CanvasInner: React.FC<{ filePath?: string, onOpenFile?: (path: string) => 
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    // Reset so the same file can be re-selected next time
+    e.target.value = '';
     if (!file) return;
 
     const formData = new FormData();

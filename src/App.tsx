@@ -69,7 +69,7 @@ export default function App() {
   const [passwordChangeStatus, setPasswordChangeStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Agent Space — full workflow state
-  type AgentStakeholder = { name: string; role: string; org: string; bucket: 'client' | 'internal' | 'unknown'; mappedTo?: string };
+  type AgentStakeholder = { name: string; originalName?: string; role: string; org: string; bucket: 'client' | 'internal' | 'unknown'; mappedTo?: string };
   type AgentNameMapping = { informal: string; canonical: string };
   const [agentFlow, setAgentFlow] = useState<{
     // which modal/overlay is showing
@@ -120,7 +120,7 @@ export default function App() {
       const knownLower: string[] = (data.knownStakeholders || []).map((n: string) => n.toLowerCase());
       const stakeholders: AgentStakeholder[] = (extracted.attendees || []).map((a: any) => {
         const known = knownLower.find(k => k.includes(a.name.toLowerCase()) || a.name.toLowerCase().includes(k));
-        return { name: a.name, role: a.role || '', org: a.org || '', bucket: known ? 'unknown' : 'unknown' } as AgentStakeholder;
+        return { name: a.name, originalName: a.name, role: a.role || '', org: a.org || '', bucket: known ? 'unknown' : 'unknown' } as AgentStakeholder;
       });
 
       if (data.isFirstTime) {
@@ -129,7 +129,7 @@ export default function App() {
       } else if (data.newStakeholders?.length > 0 || extracted.unmappedNames?.length > 0) {
         // Returning project with new/unmapped people
         const newPeople: AgentStakeholder[] = (data.newStakeholders || []).map((a: any) => ({
-          name: a.name, role: a.role || '', org: a.org || '', bucket: 'unknown' as const,
+          name: a.name, originalName: a.name, role: a.role || '', org: a.org || '', bucket: 'unknown' as const,
         }));
         const aliases: Record<string, string> = {};
         (extracted.unmappedNames || []).forEach((n: string) => { aliases[n] = ''; });
@@ -198,7 +198,7 @@ No current status available yet.
 ## Key Decisions
 (none yet)
 
-**Tags:** #active-project #${slug}
+**Tags:** #${slug}
 
 **Links:** [[${projectFileTitle}]]${clientName ? ` [[${clientName}]]` : ''}
 `;
@@ -212,8 +212,16 @@ No current status available yet.
     // Update extractData with the new project file path for generate-summary
     const updatedExtractData = { ...d, projectMdPath: saveData.savedPath || finalProjectMdPath };
 
+    // Build name aliases for any stakeholder whose name was edited by the user
+    const nameAliases = { ...agentFlow.nameAliases };
+    agentFlow.stakeholders.forEach(s => {
+      if (s.originalName && s.originalName !== s.name && s.originalName.trim() && s.name.trim()) {
+        nameAliases[s.originalName] = s.name;
+      }
+    });
+
     // Now generate summary with full context
-    await runGenerateSummary(updatedExtractData, agentFlow.nameAliases, agentFlow.stakeholders);
+    await runGenerateSummary(updatedExtractData, nameAliases, agentFlow.stakeholders);
   };
 
   // -------------------------------------------------------------------------
@@ -223,15 +231,23 @@ No current status available yet.
     const d = agentFlow.extractData;
     if (!d) return;
 
+    // Build name aliases: from "Map to existing" dropdown AND from user edits to the name field
+    const nameAliases = { ...agentFlow.nameAliases };
+    agentFlow.stakeholders.forEach(s => {
+      if (s.originalName && s.originalName !== s.name && s.originalName.trim() && s.name.trim()) {
+        nameAliases[s.originalName] = s.name;
+      }
+    });
+
     // If there are also unmapped names, go to that step next
     const unmapped = d.extracted?.unmappedNames || [];
     if (unmapped.length > 0) {
-      const aliases: Record<string, string> = {};
-      unmapped.forEach((n: string) => { aliases[n] = ''; });
+      const aliases: Record<string, string> = { ...nameAliases };
+      unmapped.forEach((n: string) => { if (!aliases[n]) aliases[n] = ''; });
       setAgentFlow(f => ({ ...f, step: 'name-mapping', nameAliases: aliases }));
       return;
     }
-    await runGenerateSummary(d, agentFlow.nameAliases, agentFlow.stakeholders);
+    await runGenerateSummary(d, nameAliases, agentFlow.stakeholders);
   };
 
   // -------------------------------------------------------------------------
@@ -1035,9 +1051,20 @@ No current status available yet.
                               stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, name: newName } : st)
                             }));
                           }}
-                          className="min-w-0 w-36 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                          className="min-w-0 w-32 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
+                          placeholder="Full name"
                         />
-                        {s.role && <span className="text-xs text-text-muted flex-shrink-0 truncate max-w-[140px]">{s.role}</span>}
+                        {/* Editable role/designation */}
+                        <input
+                          type="text"
+                          value={s.role || ''}
+                          onChange={e => setAgentFlow(f => ({
+                            ...f,
+                            stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, role: e.target.value } : st)
+                          }))}
+                          className="min-w-0 flex-1 bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-muted outline-none focus:border-interactive-accent transition-colors"
+                          placeholder="Designation / role"
+                        />
                         <div className="flex gap-1.5 ml-auto flex-shrink-0">
                           {(['client', 'internal', 'unknown'] as const).map(bucket => (
                             <button key={bucket}
@@ -1096,7 +1123,13 @@ No current status available yet.
                       className="w-full bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-normal outline-none focus:border-interactive-accent transition-colors"
                       placeholder="Full name"
                     />
-                    {s.role && <p className="text-xs text-text-muted px-1 truncate">{s.role}</p>}
+                    <input
+                      type="text"
+                      value={s.role || ''}
+                      onChange={e => setAgentFlow(f => ({ ...f, stakeholders: f.stakeholders.map((st, i) => i === idx ? { ...st, role: e.target.value } : st) }))}
+                      className="w-full bg-bg-primary border border-border-color rounded px-2 py-1 text-xs text-text-muted outline-none focus:border-interactive-accent transition-colors"
+                      placeholder="Designation / role"
+                    />
                   </div>
                   {/* Classification buttons */}
                   <div className="flex gap-1.5 flex-wrap flex-1">

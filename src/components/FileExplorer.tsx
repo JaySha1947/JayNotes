@@ -37,9 +37,17 @@ const FileTreeItem: React.FC<{
   onDuplicateFile?: (path: string) => void;
   onDeleteFile?: (path: string) => void;
 }> = ({ node, onSelectFile, onFolderSelect, activeFile, level, onContextMenu, onMoveFile, bookmarks, inlineCreate, onInlineCreateSubmit, onInlineCreateCancel, onDuplicateFile, onDeleteFile }) => {
-  const [isOpen, setIsOpen] = useState(true);
-  const [isDragOver, setIsDragOver] = useState(false);
   const isFolder = node.type === 'folder';
+  const storageKey = `jn-folder-open:${node.path}`;
+  const getInitialOpen = () => {
+    if (!isFolder) return false;
+    try {
+      const saved = localStorage.getItem(storageKey);
+      return saved === null ? true : saved === 'true';
+    } catch { return true; }
+  };
+  const [isOpen, setIsOpen] = useState(getInitialOpen);
+  const [isDragOver, setIsDragOver] = useState(false);
   const isActive = activeFile === node.path;
   const hasChildren = isFolder && node.children && node.children.length > 0;
 
@@ -84,7 +92,9 @@ const FileTreeItem: React.FC<{
         style={{ paddingLeft: `${rowPaddingLeft}px` }}
         onClick={() => {
           if (isFolder) {
-            setIsOpen(!isOpen);
+            const next = !isOpen;
+            setIsOpen(next);
+            try { localStorage.setItem(storageKey, String(next)); } catch { /* quota */ }
             onFolderSelect(node.path);
           } else {
             onSelectFile(node.path);
@@ -573,7 +583,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSelectFile, onCrea
               >
                 <div className="flex items-center gap-2">
                   <span style={{ fontSize: 13 }}>✦</span>
-                  <span>Add to Project Knowledge</span>
+                  <span>Add to project knowledge as meeting</span>
                 </div>
               </button>
               <div className="border-t border-border-color my-1" />

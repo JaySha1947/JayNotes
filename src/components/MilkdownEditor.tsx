@@ -591,7 +591,8 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   // Cache the last selection range so color/highlight can be applied even after
   // the picker opens (which may move focus away from the editor).
-  const savedSelectionRef = useRef<{ from: number; to: number } | null>(null);
+  // We store the full Selection object so CellSelection (multi-cell table) is preserved.
+  const savedSelectionRef = useRef<any | null>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const currentFileRef = useRef(filePath);
   currentFileRef.current = filePath;
@@ -743,10 +744,12 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
         };
         // Double-rAF: first rAF waits for ProseMirror to finish its initial
         // render; second rAF waits for columnResizingPlugin to also finish.
-        // The 200ms timeout is a belt-and-suspenders fallback for slow mounts.
+        // Multiple timeouts ensure widths survive the plugin's own initialization.
         requestAnimationFrame(() => requestAnimationFrame(() => {
           applyWidths();
-          setTimeout(applyWidths, 200);
+          setTimeout(applyWidths, 100);
+          setTimeout(applyWidths, 300);
+          setTimeout(applyWidths, 600);
         }));
       }
     } catch (_) { /* ignore corrupt data */ }
@@ -1354,16 +1357,26 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
 
   // Font color — restore saved selection (opening the picker can move focus)
   // before applying the mark. Also remembers last-used color and records the
-  // action for F4 repeat.
+  // action for F4 repeat. Restores the full ProseMirror Selection object so
+  // CellSelection (multi-cell table) is preserved.
   const cmdColor = useCallback((color: string | null) => {
     const view = getView();
     if (!view) return;
     const saved = savedSelectionRef.current;
     if (saved) {
-      const tr = view.state.tr.setSelection(
-        TextSelection.create(view.state.doc, saved.from, saved.to)
-      );
-      view.dispatch(tr);
+      try {
+        // If saved is a full Selection object (has .map), restore it directly
+        if (typeof saved.map === 'function') {
+          const tr = view.state.tr.setSelection(saved);
+          view.dispatch(tr);
+        } else {
+          // Fallback: it's a plain {from, to}
+          const tr = view.state.tr.setSelection(
+            TextSelection.create(view.state.doc, saved.from, saved.to)
+          );
+          view.dispatch(tr);
+        }
+      } catch (_) { /* ignore if selection is stale */ }
       view.focus();
     }
     applyFontColor(view, color);
@@ -1379,10 +1392,17 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     if (!view) return;
     const saved = savedSelectionRef.current;
     if (saved) {
-      const tr = view.state.tr.setSelection(
-        TextSelection.create(view.state.doc, saved.from, saved.to)
-      );
-      view.dispatch(tr);
+      try {
+        if (typeof saved.map === 'function') {
+          const tr = view.state.tr.setSelection(saved);
+          view.dispatch(tr);
+        } else {
+          const tr = view.state.tr.setSelection(
+            TextSelection.create(view.state.doc, saved.from, saved.to)
+          );
+          view.dispatch(tr);
+        }
+      } catch (_) { /* ignore if selection is stale */ }
       view.focus();
     }
     applyHighlight(view, color);
@@ -1578,8 +1598,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   e.preventDefault(); // Don't blur the editor — preserves selection
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                 }}
                 onClick={() => {
@@ -1605,8 +1624,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   e.preventDefault();
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                 }}
                 onClick={() => {
@@ -2004,8 +2022,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
           // (including indent/outdent) restore this saved range first.
           const view = getView();
           if (view) {
-            const { from, to } = view.state.selection;
-            savedSelectionRef.current = { from, to };
+            savedSelectionRef.current = view.state.selection;
           }
           // Clamp to viewport so the menu doesn't render off-screen
           const MENU_APPROX_W = 380;
@@ -2235,8 +2252,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   // Save selection for cmdColor to restore
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                   cmdColor(lastFontColorRef.current);
                   setCtxMenu(null);
@@ -2253,8 +2269,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   // Save selection before opening palette
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                   const btn = e.currentTarget as HTMLElement;
                   const rect = btn.getBoundingClientRect();
@@ -2277,8 +2292,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   stop(e);
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                   cmdHighlight(lastHighlightRef.current);
                   setCtxMenu(null);
@@ -2294,8 +2308,7 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
                   stop(e);
                   const view = getView();
                   if (view) {
-                    const { from, to } = view.state.selection;
-                    savedSelectionRef.current = { from, to };
+                    savedSelectionRef.current = view.state.selection;
                   }
                   const btn = e.currentTarget as HTMLElement;
                   const rect = btn.getBoundingClientRect();
