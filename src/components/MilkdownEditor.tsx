@@ -719,50 +719,80 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
     };
 
     // ── Column-width restore ─────────────────────────────────────────────
-    // Milkdown's columnResizingPlugin stores widths in <col style="width:Xpx">
-    // elements. We save them as a sidecar in localStorage and restore via DOM
-    // after the editor mounts, since GFM markdown has no column-width syntax.
+    // prosemirror-tables stores column widths as a `colwidth` attribute on
+    // each table cell node (e.g. [120, null] for a cell spanning 2 columns).
+    // The columnResizingPlugin reads these attributes to build <col> elements,
+    // so DOM manipulation gets overwritten on every redraw.
+    //
+    // Correct approach: restore widths by patching cell attrs via a ProseMirror
+    // transaction, then let the plugin render the DOM from the updated doc.
+    //
+    // Saved format: Array<tableWidths> where tableWidths = Array<colWidth | null>
+    // indexed by column position (not cell position — columns can span cells).
     try {
       const savedWidths = localStorage.getItem(`jn-colwidths:${path}`);
       if (savedWidths) {
-        const tableWidths = JSON.parse(savedWidths) as Array<Array<number | null>>;
+        const tableColWidths = JSON.parse(savedWidths) as Array<Array<number | null>>;
         const applyWidths = () => {
           try {
-            const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
-            if (!editorDom) return;
-            const tables = editorDom.querySelectorAll('table');
-            tableWidths.forEach((widths, tIdx) => {
-              const table = tables[tIdx];
-              if (!table) return;
-              const cols = table.querySelectorAll('colgroup col');
-              widths.forEach((w, cIdx) => {
-                const col = cols[cIdx] as HTMLElement | undefined;
-                if (col && w != null) col.style.width = `${w}px`;
+            const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
+            if (!view) return;
+            const { state } = view;
+            let tr = state.tr;
+            let changed = false;
+            let tIdx = 0;
+            state.doc.descendants((node: any, pos: number) => {
+              if (node.type.name !== 'table') return true;
+              const colWidths = tableColWidths[tIdx++];
+              if (!colWidths) return true;
+              // Walk every cell in the table
+              let colCursor = 0;
+              node.descendants((cell: any, cellPos: number) => {
+                if (cell.type.name !== 'table_cell' && cell.type.name !== 'table_header') return true;
+                const colspan = cell.attrs.colspan || 1;
+                // Build new colwidth array for this cell from saved per-column widths
+                const newColwidth: (number | null)[] = [];
+                for (let span = 0; span < colspan; span++) {
+                  const savedW = colWidths[colCursor + span];
+                  newColwidth.push(savedW ?? null);
+                }
+                const hasWidth = newColwidth.some(w => w != null && w > 0);
+                const currentColwidth = cell.attrs.colwidth;
+                const same = hasWidth && currentColwidth &&
+                  currentColwidth.length === newColwidth.length &&
+                  newColwidth.every((w, i) => w === currentColwidth[i]);
+                if (!same && hasWidth) {
+                  tr = tr.setNodeMarkup(
+                    pos + 1 + cellPos, // absolute pos of cell in doc
+                    undefined,
+                    { ...cell.attrs, colwidth: newColwidth }
+                  );
+                  changed = true;
+                }
+                colCursor += colspan;
+                return false; // don't descend into cell content
               });
+              return true;
             });
-          } catch (_) { /* ignore */ }
+            if (changed) {
+              view.dispatch(tr.setMeta('addToHistory', false));
+            }
+          } catch (_) { /* ignore if doc structure changed */ }
         };
-        // Double-rAF: first rAF waits for ProseMirror to finish its initial
-        // render; second rAF waits for columnResizingPlugin to also finish.
-        // Multiple timeouts ensure widths survive the plugin's own initialization.
+        // Double-rAF ensures ProseMirror and the resizing plugin have both run
         requestAnimationFrame(() => requestAnimationFrame(() => {
           applyWidths();
-          setTimeout(applyWidths, 100);
-          setTimeout(applyWidths, 300);
-          setTimeout(applyWidths, 600);
+          // Belt-and-suspenders: retry once more after plugin settles
+          setTimeout(applyWidths, 150);
         }));
       }
     } catch (_) { /* ignore corrupt data */ }
 
     // ── Column-width observer ────────────────────────────────────────────
-    // Save column widths after the user finishes dragging a resize handle.
-    // We use mouseup on the document (the resize handle is inside the editor
-    // but the drag ends on document) rather than a MutationObserver, because
-    // a subtree style-observer fires on every spell-check decoration and
-    // causes excessive calls / potential crashes.
+    // Save column widths after the user finishes a resize drag.
+    // We read from the ProseMirror doc (cell attrs) rather than the DOM,
+    // so the saved data is always in sync with what the plugin renders.
     if (colWidthObserverRef.current) {
-      // Reuse the ref to store a cleanup fn via a small wrapper object trick —
-      // store the removeEventListener as a no-op observer disconnect substitute.
       (colWidthObserverRef.current as any).disconnect?.();
     }
     let colWidthTimer: ReturnType<typeof setTimeout> | null = null;
@@ -770,25 +800,31 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       const currentPath = currentFileRef.current;
       if (!currentPath) return;
       try {
-        const editorDom = inst.action((ctx: any) => ctx.get(editorViewCtx))?.dom as HTMLElement | undefined;
-        if (!editorDom) return;
-        const tables = editorDom.querySelectorAll('table');
-        if (tables.length === 0) return;
-        const tableWidths: Array<Array<number | null>> = [];
-        tables.forEach(table => {
-          const cols = table.querySelectorAll('colgroup col');
+        const view = inst.action((ctx: any) => ctx.get(editorViewCtx));
+        if (!view) return;
+        const { state } = view;
+        const tableColWidths: Array<Array<number | null>> = [];
+        state.doc.descendants((node: any) => {
+          if (node.type.name !== 'table') return true;
+          // Gather widths from the first row only (all rows share the same column widths)
+          const firstRow = node.child(0);
+          if (!firstRow) return true;
           const widths: Array<number | null> = [];
-          cols.forEach((col: Element) => {
-            const w = (col as HTMLElement).style.width;
-            widths.push(w ? parseFloat(w) : null);
+          firstRow.forEach((cell: any) => {
+            const colspan = cell.attrs.colspan || 1;
+            for (let i = 0; i < colspan; i++) {
+              const w = cell.attrs.colwidth?.[i];
+              widths.push(w && w > 0 ? w : null);
+            }
           });
-          tableWidths.push(widths);
+          tableColWidths.push(widths);
+          return true;
         });
-        const allNull = tableWidths.every(t => t.every(w => w == null));
+        const allNull = tableColWidths.every(t => t.every(w => w == null));
         if (allNull) {
           localStorage.removeItem(`jn-colwidths:${currentPath}`);
         } else {
-          localStorage.setItem(`jn-colwidths:${currentPath}`, JSON.stringify(tableWidths));
+          localStorage.setItem(`jn-colwidths:${currentPath}`, JSON.stringify(tableColWidths));
         }
       } catch (_) { /* quota — non-fatal */ }
     };
@@ -797,7 +833,6 @@ const EditorInner: React.FC<MilkdownEditorProps> = ({
       colWidthTimer = setTimeout(saveColWidths, 300);
     };
     document.addEventListener('mouseup', onMouseUp);
-    // Store cleanup in the ref using a fake observer shape
     colWidthObserverRef.current = { disconnect: () => document.removeEventListener('mouseup', onMouseUp) } as any;
   }, []);
 

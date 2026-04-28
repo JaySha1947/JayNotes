@@ -1123,6 +1123,11 @@ app.get('/api/attachments/:filename', authHeaderOrQuery, (req: any, res) => {
 // Iframe proxy (SSRF-guarded)
 // =============================================================================
 
+// Simple status probe — no heavy processing, just tells the client if the proxy is on
+app.get('/api/proxy/status', authHeaderOrQuery, (req: any, res: any) => {
+  res.json({ enabled: ENABLE_IFRAME_PROXY });
+});
+
 app.get('/api/proxy/iframe', authHeaderOrQuery, async (req: any, res: any) => {
   if (!ENABLE_IFRAME_PROXY) return res.status(404).send('Proxy disabled');
   const targetUrl = req.query.url as string;

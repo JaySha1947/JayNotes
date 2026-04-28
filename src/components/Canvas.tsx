@@ -528,7 +528,9 @@ const MediaNode = ({ data, selected, id, width, height }: NodeProps<any>) => {
   const getMediaUrl = (file: string) => {
     if (!file) return '';
     if (file.startsWith('http') || file.startsWith('/api/')) return file;
-    return `/api/attachment/${file}`;
+    // Server route is /api/attachments/:filename (plural)
+    const token = localStorage.getItem('jays_notes_token') || '';
+    return `/api/attachments/${file}?token=${encodeURIComponent(token)}`;
   };
 
   const colorClasses = data.color || 'bg-bg-primary border-border-color';
@@ -667,11 +669,14 @@ const WebPageIframeBody = ({ url, zoom }: { url: string; zoom: number }) => {
   const [proxyOk, setProxyOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Probe the proxy with a HEAD-like fetch to detect disabled state without loading a full page
-    fetch(`/api/proxy/iframe?url=${encodeURIComponent(url)}&token=${localStorage.getItem('jays_notes_token') || ''}`, { method: 'HEAD' })
-      .then(r => setProxyOk(r.ok))
+    // Ask the server whether the proxy is enabled — avoids a HEAD request
+    // to the proxy itself which doesn't support HEAD and requires a real URL.
+    const token = localStorage.getItem('jays_notes_token') || '';
+    fetch(`/api/proxy/status?token=${encodeURIComponent(token)}`)
+      .then(r => r.json())
+      .then(d => setProxyOk(d.enabled === true))
       .catch(() => setProxyOk(false));
-  }, [url]);
+  }, []);
 
   if (proxyOk === false) {
     return (
@@ -1162,9 +1167,9 @@ const CanvasInner: React.FC<{ filePath?: string, onOpenFile?: (path: string) => 
           headers: { 'Authorization': `Bearer ${token}` },
           body: formData
         }).then(res => res.json()).then(data => {
-          if (data.url) {
-            // Get filename from URL which is /api/attachment/filename.ext
-            const filename = data.url.split('/').pop();
+          if (data.path) {
+            // Server returns { path: "attachments/filename.ext" } — store just the filename
+            const filename = data.path.split('/').pop();
             const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
             const newNode: Node = {
               id: `node-${Date.now()}`,
@@ -1207,8 +1212,8 @@ const CanvasInner: React.FC<{ filePath?: string, onOpenFile?: (path: string) => 
             headers: { 'Authorization': `Bearer ${token}` },
             body: formData
           }).then(res => res.json()).then(data => {
-            if (data.url) {
-              const filename = data.url.split('/').pop();
+            if (data.path) {
+              const filename = data.path.split('/').pop();
               const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
               const newNode: Node = {
                 id: `node-${Date.now()}`,
@@ -1351,8 +1356,9 @@ const CanvasInner: React.FC<{ filePath?: string, onOpenFile?: (path: string) => 
         body: formData
       });
       const data = await res.json();
-      if (data.url) {
-        const filename = data.url.split('/').pop();
+      if (data.path) {
+        // Server returns { path: "attachments/filename.ext" } — store just the filename
+        const filename = data.path.split('/').pop();
         const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
         const newNode: Node = {
           id: `node-${Date.now()}`,
@@ -1364,6 +1370,8 @@ const CanvasInner: React.FC<{ filePath?: string, onOpenFile?: (path: string) => 
           style: { width: 400, height: 300 }
         };
         setNodes((nds) => [...nds, newNode]);
+      } else {
+        console.error('Upload response missing path:', data);
       }
     } catch (error) {
       console.error('File upload failed', error);
